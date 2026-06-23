@@ -6,12 +6,14 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
 
 from calculations.checks import check_design_parameters, checks_to_dataframe
 from calculations.common import CONCRETE_DESIGN_STRENGTH, STEEL_DESIGN_STRENGTH, default_parameters
 from calculations.envelope import calculate_envelope
 from calculations.internal_force import force_points_to_dataframe, line_load_control_points, point_load_control_points
+from calculations.load_combination import analyze_load_combinations
 from calculations.loads import calculate_load_transfer, transfer_to_dataframe
 from calculations.main_beam import MainBeamInput, calculate_main_beam
 from calculations.moment_capacity import (
@@ -27,6 +29,7 @@ from charts.plot_moment import figure_to_png_bytes, plot_envelope_diagram, plot_
 from charts.plot_resisting_moment import plot_resisting_moment_diagram
 from charts.plot_shear import plot_shear_diagram
 from export.export_excel import build_excel_workbook
+from export.export_pdf import build_pdf_report
 from export.export_report import build_markdown_report
 from export.export_word import build_word_report
 
@@ -42,8 +45,10 @@ PAGES = [
     "🧮 配筋推荐",
     "📊 图表分析",
     "📈 抵抗弯矩",
+    "最不利荷载组合分析",
     "✅ 智能校核",
     "📤 结果导出",
+    "自动计算书",
     "📘 程序说明",
 ]
 
@@ -963,6 +968,61 @@ def render_envelope_page(results: dict[str, Any]) -> None:
     graph_note("简化示意 / 控制点包络", "不同活载布置下的控制截面内力", "课程设计中最不利内力辅助比较", "活载布置、教材内力系数、影响线或教师要求")
 
 
+def render_load_combination_page(results: dict[str, Any]) -> None:
+    render_header("最不利荷载组合分析", "自动比较典型活载布置工况，输出控制弯矩、控制剪力和工程解释。", ["加分项", "活载布置", "包络分析"])
+    render_warning_box("本模块采用课程设计辅助简化系数生成典型工况，适合作为答辩展示和最不利内力筛选；最终内力系数仍需按教材或教师要求复核。")
+    member = st.radio("选择分析构件", ["板", "次梁", "主梁"], horizontal=True, key="load_combination_member")
+    analysis = analyze_load_combinations(member, results)
+
+    render_metric_cards(
+        [
+            ("最不利工况名称", analysis.controlling_pattern, "", analysis.moment_explanation),
+            ("控制弯矩", analysis.controlling_moment, "kN·m", analysis.controlling_layout),
+            ("控制剪力", analysis.controlling_shear, "kN", analysis.shear_explanation),
+        ],
+        columns=3,
+    )
+    render_info_box(f"{analysis.moment_explanation}；{analysis.shear_explanation}。")
+
+    with st.expander("最不利结果汇总", expanded=True):
+        render_dataframe(analysis.summary_df)
+    with st.expander("全部工况计算结果", expanded=False):
+        render_dataframe(analysis.comparison_df)
+
+    pattern_df = (
+        analysis.comparison_df.groupby("工况名称", as_index=False)
+        .agg({"弯矩 M (kN·m)": lambda x: x.abs().max(), "剪力 V (kN)": lambda x: x.abs().max()})
+        .rename(columns={"弯矩 M (kN·m)": "最大绝对弯矩 (kN·m)", "剪力 V (kN)": "最大绝对剪力 (kN)"})
+    )
+    bar_fig = go.Figure()
+    bar_fig.add_bar(x=pattern_df["工况名称"], y=pattern_df["最大绝对弯矩 (kN·m)"], name="最大绝对弯矩")
+    bar_fig.add_bar(x=pattern_df["工况名称"], y=pattern_df["最大绝对剪力 (kN)"], name="最大绝对剪力")
+    bar_fig.update_layout(
+        title=f"{member}工况对比柱状图",
+        barmode="group",
+        paper_bgcolor="#f6f8fb",
+        plot_bgcolor="#ffffff",
+        font={"family": "Arial, Microsoft YaHei, sans-serif", "color": "#17324d"},
+        legend={"orientation": "h"},
+        margin={"l": 45, "r": 20, "t": 58, "b": 80},
+    )
+    st.plotly_chart(bar_fig, use_container_width=True)
+
+    labels = analysis.moment_envelope_df["截面位置"].tolist()
+    xs = analysis.moment_envelope_df["x (m)"].astype(float).tolist()
+    moments = analysis.moment_envelope_df["最大弯矩包络 (kN·m)"].astype(float).tolist()
+    shears = analysis.shear_envelope_df["最大剪力包络 (kN)"].astype(float).tolist()
+    c1, c2 = st.columns(2)
+    with c1:
+        render_chart(plot_moment_diagram(xs, moments, labels, f"{member}最大弯矩包络图"))
+        with st.expander("最大弯矩包络数据", expanded=False):
+            render_dataframe(analysis.moment_envelope_df)
+    with c2:
+        render_chart(plot_shear_diagram(xs, shears, labels, f"{member}最大剪力包络图"))
+        with st.expander("最大剪力包络数据", expanded=False):
+            render_dataframe(analysis.shear_envelope_df)
+
+
 def render_rebar_page(tables: dict[str, pd.DataFrame]) -> None:
     render_header("配筋方案推荐与超配率提示", "汇总板筋、梁纵筋和箍筋推荐方案，快速识别不足和偏保守配置。", ["配筋推荐", "超配率"])
     render_info_box("超配率 = (实配面积 - 计算所需面积) / 计算所需面积 × 100%。超过 30% 时提示偏保守。")
@@ -1057,6 +1117,41 @@ def render_export_page(tables: dict[str, pd.DataFrame]) -> None:
     render_info_box("图片导出请进入板、次梁、主梁、简化包络示意图或简化抵抗弯矩示意图页面，点击对应 PNG 下载按钮。")
 
 
+def render_auto_report_page(params: dict[str, Any], tables: dict[str, pd.DataFrame], results: dict[str, Any]) -> None:
+    render_header("自动计算书", "输入基本学生信息后，自动生成可下载的课程设计计算书 PDF。", ["PDF", "reportlab", "浏览器下载"])
+    render_warning_box("PDF 由程序在内存中生成，不保存到本地固定路径；下载位置由浏览器决定。提交前请人工复核计算书中的公式、单位、配筋和教师指定格式。")
+    c1, c2 = st.columns(2)
+    with c1:
+        project_name = st.text_input("项目名称", value="整体式单向板肋形楼盖课程设计计算书")
+        student_name = st.text_input("学生姓名", value="")
+        student_id = st.text_input("学号", value="")
+    with c2:
+        class_name = st.text_input("班级", value="")
+        report_date = st.date_input("日期")
+    render_feature_cards(
+        [
+            ("封面信息", "项目名称、学生姓名、学号、班级和日期。"),
+            ("计算过程", "包含板、次梁、主梁的荷载、内力和配筋表。"),
+            ("图表插入", "自动插入弯矩图、剪力图、包络图和抵抗弯矩图。"),
+        ],
+        columns=3,
+    )
+    student_info = {
+        "project_name": project_name,
+        "student_name": student_name,
+        "student_id": student_id,
+        "class_name": class_name,
+        "date": report_date.isoformat(),
+    }
+    pdf_bytes = build_pdf_report(student_info, params, tables, results)
+    st.download_button(
+        "下载计算书 PDF",
+        pdf_bytes,
+        file_name="整体式单向板肋形楼盖课程设计计算书.pdf",
+        mime="application/pdf",
+    )
+
+
 def render_markdown_doc(path: str) -> None:
     doc_path = Path(path)
     if doc_path.exists():
@@ -1110,10 +1205,14 @@ def main() -> None:
         render_rebar_page(tables)
     elif page == "📈 抵抗弯矩":
         render_resisting_page(results)
+    elif page == "最不利荷载组合分析":
+        render_load_combination_page(results)
     elif page == "✅ 智能校核":
         render_checks_page(tables)
     elif page == "📤 结果导出":
         render_export_page(tables)
+    elif page == "自动计算书":
+        render_auto_report_page(params, tables, results)
     else:
         render_header("程序说明与已知不足", "说明程序公式、适用范围、简化假定和后续改进方向。", ["说明文档", "人工复核"])
         render_markdown_doc("docs/程序说明书.md")
