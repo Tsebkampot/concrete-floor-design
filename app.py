@@ -45,10 +45,10 @@ PAGES = [
     "🧮 配筋推荐",
     "📊 图表分析",
     "📈 抵抗弯矩",
-    "最不利荷载组合分析",
+    "📈 最不利荷载组合分析",
     "✅ 智能校核",
     "📤 结果导出",
-    "自动计算书",
+    "📄 自动计算书",
     "📘 程序说明",
 ]
 
@@ -212,6 +212,196 @@ div.stTabs [data-baseweb="tab-list"] {
 div.stTabs [data-baseweb="tab"] {
   border-radius: 10px 10px 0 0;
   background: #e8f2f8;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --hydro-blue: #38bdf8;
+    --hydro-cyan: #22d3ee;
+    --deep-blue: #e6f6ff;
+    --page-bg: #0f172a;
+    --card-border: #334155;
+    --muted: #cbd5e1;
+  }
+  .stApp {
+    background: linear-gradient(180deg, #0b1220 0%, #111827 52%, #0f172a 100%);
+    color: #e5eef8;
+  }
+  .main .block-container,
+  [data-testid="stAppViewContainer"],
+  [data-testid="stHeader"] {
+    color: #e5eef8;
+  }
+  section[data-testid="stSidebar"] {
+    background: linear-gradient(180deg, #082f49 0%, #075985 58%, #0f172a 100%);
+    border-right: 1px solid rgba(125, 211, 252, 0.28);
+  }
+  section[data-testid="stSidebar"] *,
+  section[data-testid="stSidebar"] label,
+  section[data-testid="stSidebar"] p,
+  section[data-testid="stSidebar"] span {
+    color: #f0f9ff !important;
+  }
+  section[data-testid="stSidebar"] [role="radiogroup"] label {
+    border-radius: 8px;
+    padding: 3px 6px;
+  }
+  section[data-testid="stSidebar"] [role="radiogroup"] label:hover {
+    background: rgba(186, 230, 253, 0.12);
+  }
+  .sidebar-subtitle {
+    color: #bae6fd !important;
+  }
+  .hero {
+    background: linear-gradient(135deg, #082f49 0%, #075985 56%, #0891b2 100%);
+    border: 1px solid rgba(125, 211, 252, 0.26);
+    box-shadow: 0 18px 38px rgba(0, 0, 0, 0.36);
+  }
+  .hero p {
+    color: #dff7ff;
+  }
+  .badge {
+    background: rgba(14, 165, 183, 0.22);
+    border-color: rgba(125, 211, 252, 0.36);
+    color: #f8fafc;
+  }
+  .metric-card, .feature-card, .flow-card, .info-card {
+    background: #172033;
+    border-color: #334155;
+    box-shadow: 0 12px 26px rgba(0, 0, 0, 0.28);
+  }
+  .metric-title,
+  .metric-desc,
+  .feature-card p,
+  .flow-card p,
+  .info-card p,
+  .footer {
+    color: #cbd5e1;
+  }
+  .metric-value,
+  .feature-card h3,
+  .flow-card h3,
+  .info-card h3,
+  .section-title {
+    color: #f8fafc;
+  }
+  .metric-unit {
+    color: #bae6fd;
+  }
+  .hydro-box {
+    background: #102638;
+    border-left-color: #22d3ee;
+    color: #e0f2fe;
+    border-top: 1px solid #1e3a56;
+    border-right: 1px solid #1e3a56;
+    border-bottom: 1px solid #1e3a56;
+  }
+  .warning-box {
+    background: #342713;
+    border-left-color: #f59e0b;
+    color: #fde68a;
+    border-top: 1px solid #78350f;
+    border-right: 1px solid #78350f;
+    border-bottom: 1px solid #78350f;
+  }
+  div.stButton > button,
+  div.stDownloadButton > button {
+    background: #0e7490;
+    border: 1px solid #67e8f9;
+    color: #f8fafc;
+    box-shadow: 0 8px 18px rgba(8, 145, 178, 0.22);
+  }
+  div.stButton > button:hover,
+  div.stDownloadButton > button:hover {
+    background: #0891b2;
+    border-color: #a5f3fc;
+    color: #ffffff;
+    box-shadow: 0 10px 22px rgba(34, 211, 238, 0.28);
+  }
+  div.stTabs [data-baseweb="tab-list"] {
+    border-bottom: 1px solid #334155;
+  }
+  div.stTabs [data-baseweb="tab"] {
+    background: #172033;
+    color: #cbd5e1;
+    border: 1px solid #334155;
+    border-bottom: 0;
+  }
+  div.stTabs [aria-selected="true"] {
+    background: #0e7490 !important;
+    color: #ffffff !important;
+    border-color: #67e8f9 !important;
+  }
+  div[data-testid="stExpander"] {
+    background: #111827;
+    border: 1px solid #334155;
+    border-radius: 10px;
+  }
+  div[data-testid="stExpander"] details summary {
+    background: #172033;
+    color: #f8fafc;
+    border-radius: 10px;
+  }
+  div[data-testid="stExpander"] details summary:hover {
+    background: #1f2a44;
+  }
+  [data-testid="stDataFrame"],
+  [data-testid="stTable"],
+  div[data-testid="stDataFrame"] div,
+  div[data-testid="stDataFrame"] canvas {
+    background-color: #111827;
+    color: #e5eef8;
+  }
+  div[data-testid="stDataFrame"] {
+    border: 1px solid #334155;
+    border-radius: 8px;
+  }
+  table {
+    color: #e5eef8;
+    background: #111827;
+  }
+  thead tr, th {
+    background: #0f4c81 !important;
+    color: #f8fafc !important;
+    border-color: #38bdf8 !important;
+  }
+  tbody tr, td {
+    background: #172033 !important;
+    color: #e5eef8 !important;
+    border-color: #334155 !important;
+  }
+  tbody tr:nth-child(even) td {
+    background: #1f2937 !important;
+  }
+  [data-baseweb="input"],
+  [data-baseweb="select"],
+  [data-baseweb="textarea"],
+  [data-baseweb="base-input"],
+  div[data-testid="stNumberInput"] input,
+  div[data-testid="stTextInput"] input {
+    background: #111827 !important;
+    border-color: #475569 !important;
+    color: #f8fafc !important;
+  }
+  [data-baseweb="input"]:focus-within,
+  [data-baseweb="select"]:focus-within,
+  div[data-testid="stNumberInput"] input:focus,
+  div[data-testid="stTextInput"] input:focus {
+    border-color: #67e8f9 !important;
+    box-shadow: 0 0 0 1px #67e8f9;
+  }
+  input,
+  textarea,
+  [role="combobox"],
+  [data-baseweb="select"] span {
+    color: #f8fafc !important;
+  }
+  label,
+  .stMarkdown,
+  .stCaption,
+  p,
+  span {
+    color: inherit;
+  }
 }
 </style>
 """,
@@ -969,7 +1159,7 @@ def render_envelope_page(results: dict[str, Any]) -> None:
 
 
 def render_load_combination_page(results: dict[str, Any]) -> None:
-    render_header("最不利荷载组合分析", "自动比较典型活载布置工况，输出控制弯矩、控制剪力和工程解释。", ["加分项", "活载布置", "包络分析"])
+    render_header("📈 最不利荷载组合分析", "自动比较典型活载布置工况，输出控制弯矩、控制剪力和工程解释。", ["加分项", "活载布置", "包络分析"])
     render_warning_box("本模块采用课程设计辅助简化系数生成典型工况，适合作为答辩展示和最不利内力筛选；最终内力系数仍需按教材或教师要求复核。")
     member = st.radio("选择分析构件", ["板", "次梁", "主梁"], horizontal=True, key="load_combination_member")
     analysis = analyze_load_combinations(member, results)
@@ -1118,7 +1308,7 @@ def render_export_page(tables: dict[str, pd.DataFrame]) -> None:
 
 
 def render_auto_report_page(params: dict[str, Any], tables: dict[str, pd.DataFrame], results: dict[str, Any]) -> None:
-    render_header("自动计算书", "输入基本学生信息后，自动生成可下载的课程设计计算书 PDF。", ["PDF", "reportlab", "浏览器下载"])
+    render_header("📄 自动生成计算书", "输入基本学生信息后，自动生成可下载的课程设计计算书 PDF。", ["PDF", "reportlab", "浏览器下载"])
     render_warning_box("PDF 由程序在内存中生成，不保存到本地固定路径；下载位置由浏览器决定。提交前请人工复核计算书中的公式、单位、配筋和教师指定格式。")
     c1, c2 = st.columns(2)
     with c1:
@@ -1205,13 +1395,13 @@ def main() -> None:
         render_rebar_page(tables)
     elif page == "📈 抵抗弯矩":
         render_resisting_page(results)
-    elif page == "最不利荷载组合分析":
+    elif page == "📈 最不利荷载组合分析":
         render_load_combination_page(results)
     elif page == "✅ 智能校核":
         render_checks_page(tables)
     elif page == "📤 结果导出":
         render_export_page(tables)
-    elif page == "自动计算书":
+    elif page == "📄 自动计算书":
         render_auto_report_page(params, tables, results)
     else:
         render_header("程序说明与已知不足", "说明程序公式、适用范围、简化假定和后续改进方向。", ["说明文档", "人工复核"])
