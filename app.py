@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from html import escape
 from pathlib import Path
 from typing import Any
 
@@ -50,6 +51,44 @@ PAGES = [
     "📤 结果导出",
     "📄 自动计算书",
     "📘 程序说明",
+]
+
+NAV_GROUPS = [
+    (
+        "基础设置",
+        [
+            ("🏠 首页", "🏠 首页"),
+            ("⚙️ 基本参数", "⚙️ 基本参数"),
+            ("📐 截面初估", "📐 截面初估"),
+        ],
+    ),
+    (
+        "构件计算",
+        [
+            ("🧱 板计算", "🧱 板计算"),
+            ("🏗️ 次梁计算", "🏗️ 次梁计算"),
+            ("🏛️ 主梁计算", "🏛️ 主梁计算"),
+            ("🔁 荷载传递", "🔁 荷载传递"),
+        ],
+    ),
+    (
+        "分析与校核",
+        [
+            ("🧮 配筋推荐", "🧮 配筋推荐"),
+            ("📊 图表分析", "📊 图表分析"),
+            ("📈 抵抗弯矩", "📈 抵抗弯矩"),
+            ("📉 最不利组合", "📈 最不利荷载组合分析"),
+            ("✅ 智能校核", "✅ 智能校核"),
+        ],
+    ),
+    (
+        "成果输出",
+        [
+            ("📤 结果导出", "📤 结果导出"),
+            ("📄 自动计算书", "📄 自动计算书"),
+            ("📘 程序说明", "📘 程序说明"),
+        ],
+    ),
 ]
 
 
@@ -200,6 +239,71 @@ div[data-testid="stSidebarNav"] {display: none;}
   font-size: 12px;
   margin-bottom: 14px;
 }
+.nav-group-title {
+  color: #bfeeff;
+  font-size: 12px;
+  font-weight: 760;
+  letter-spacing: 0;
+  margin: 14px 0 5px 0;
+  opacity: 0.92;
+}
+.nav-item-selected {
+  display: flex;
+  align-items: center;
+  min-height: 34px;
+  border-radius: 9px;
+  padding: 7px 10px;
+  margin: 3px 0;
+  background: #0ea5b7;
+  color: #ffffff;
+  border: 1px solid rgba(165, 243, 252, 0.6);
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.25;
+  box-shadow: 0 8px 18px rgba(14, 165, 183, 0.2);
+}
+.nav-item-selected .nav-emoji {
+  width: 22px;
+  display: inline-flex;
+  justify-content: center;
+  margin-right: 7px;
+  font-size: 15px;
+  line-height: 1;
+}
+.nav-item-selected .nav-text {
+  font-size: 15px;
+}
+section[data-testid="stSidebar"] div.stButton {
+  margin: 0;
+}
+section[data-testid="stSidebar"] div.stButton > button {
+  width: 100%;
+  justify-content: flex-start;
+  min-height: 32px;
+  padding: 6px 10px;
+  border-radius: 9px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: #e8f8ff;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.25;
+  box-shadow: none;
+}
+section[data-testid="stSidebar"] div.stButton > button:hover {
+  background: rgba(186, 230, 253, 0.14);
+  border-color: rgba(186, 230, 253, 0.26);
+  color: #ffffff;
+}
+section[data-testid="stSidebar"] div.stButton > button p {
+  width: 100%;
+  text-align: left;
+  font-size: 15px;
+  line-height: 1.2;
+}
+section[data-testid="stSidebar"] div[data-testid="stButton"] {
+  margin-bottom: 1px;
+}
 div.stButton > button, div.stDownloadButton > button {
   border-radius: 10px;
   border: 1px solid #0ea5b7;
@@ -213,43 +317,130 @@ div.stTabs [data-baseweb="tab"] {
   border-radius: 10px 10px 0 0;
   background: #e8f2f8;
 }
+.data-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  border: 1px solid #d8e3ec;
+  border-radius: 10px;
+  background: #ffffff;
+  margin: 8px 0 14px 0;
+}
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  color: #17324d;
+  font-size: 14px;
+}
+.data-table th {
+  background: #0f4c81;
+  color: #ffffff;
+  font-weight: 700;
+  padding: 9px 10px;
+  border: 1px solid #d8e3ec;
+  text-align: left;
+  white-space: nowrap;
+}
+.data-table td {
+  background: #ffffff;
+  color: #17324d;
+  padding: 8px 10px;
+  border: 1px solid #d8e3ec;
+  vertical-align: top;
+}
+.data-table tr:nth-child(even) td {
+  background: #f6f8fb;
+}
+.data-table td.cell-ok {
+  background: #dcfce7;
+  color: #166534;
+  font-weight: 650;
+}
+.data-table td.cell-warn {
+  background: #fff7ed;
+  color: #9a3412;
+  font-weight: 650;
+}
+.data-table td.cell-error {
+  background: #fee2e2;
+  color: #991b1b;
+  font-weight: 650;
+}
 @media (prefers-color-scheme: dark) {
   :root {
     --hydro-blue: #38bdf8;
     --hydro-cyan: #22d3ee;
-    --deep-blue: #e6f6ff;
+    --deep-blue: #f8fafc;
     --page-bg: #0f172a;
-    --card-border: #334155;
+    --card-border: #475569;
     --muted: #cbd5e1;
+    --text-color: #f8fafc;
+    --secondary-text-color: #cbd5e1;
+    --background-color: #0f172a;
+    --secondary-background-color: #1e293b;
   }
   .stApp {
-    background: linear-gradient(180deg, #0b1220 0%, #111827 52%, #0f172a 100%);
-    color: #e5eef8;
+    background: #0f172a;
+    color: #f8fafc;
+  }
+  [data-testid="stAppViewContainer"] {
+    background: linear-gradient(180deg, #0f172a 0%, #111827 54%, #0f172a 100%);
+  }
+  [data-testid="stHeader"] {
+    background: rgba(15, 23, 42, 0.88);
   }
   .main .block-container,
   [data-testid="stAppViewContainer"],
-  [data-testid="stHeader"] {
-    color: #e5eef8;
+  [data-testid="stVerticalBlock"],
+  [data-testid="stMarkdownContainer"],
+  [data-testid="stCaptionContainer"] {
+    color: #f8fafc;
   }
   section[data-testid="stSidebar"] {
-    background: linear-gradient(180deg, #082f49 0%, #075985 58%, #0f172a 100%);
-    border-right: 1px solid rgba(125, 211, 252, 0.28);
+    background: linear-gradient(180deg, #082f49 0%, #075985 58%, #0f172a 100%) !important;
+    border-right: 1px solid rgba(125, 211, 252, 0.36);
   }
   section[data-testid="stSidebar"] *,
   section[data-testid="stSidebar"] label,
   section[data-testid="stSidebar"] p,
   section[data-testid="stSidebar"] span {
-    color: #f0f9ff !important;
+    color: #f8fafc !important;
   }
   section[data-testid="stSidebar"] [role="radiogroup"] label {
     border-radius: 8px;
-    padding: 3px 6px;
+    padding: 5px 7px;
+    border: 1px solid transparent;
   }
   section[data-testid="stSidebar"] [role="radiogroup"] label:hover {
-    background: rgba(186, 230, 253, 0.12);
+    background: rgba(186, 230, 253, 0.14);
+    border-color: rgba(186, 230, 253, 0.28);
+  }
+  section[data-testid="stSidebar"] [role="radiogroup"] [aria-checked="true"] + div,
+  section[data-testid="stSidebar"] [role="radio"][aria-checked="true"] {
+    color: #ffffff !important;
   }
   .sidebar-subtitle {
     color: #bae6fd !important;
+  }
+  .nav-group-title {
+    color: #bae6fd !important;
+  }
+  .nav-item-selected {
+    background: #0891b2;
+    border-color: #67e8f9;
+    color: #ffffff !important;
+    box-shadow: 0 8px 18px rgba(34, 211, 238, 0.24);
+  }
+  section[data-testid="stSidebar"] div.stButton > button {
+    background: transparent;
+    color: #e0f2fe;
+    border-color: transparent;
+    box-shadow: none;
+  }
+  section[data-testid="stSidebar"] div.stButton > button:hover {
+    background: rgba(186, 230, 253, 0.16);
+    border-color: rgba(186, 230, 253, 0.28);
+    color: #ffffff;
+    box-shadow: none;
   }
   .hero {
     background: linear-gradient(135deg, #082f49 0%, #075985 56%, #0891b2 100%);
@@ -265,10 +456,17 @@ div.stTabs [data-baseweb="tab"] {
     color: #f8fafc;
   }
   .metric-card, .feature-card, .flow-card, .info-card {
-    background: #172033;
-    border-color: #334155;
-    box-shadow: 0 12px 26px rgba(0, 0, 0, 0.28);
+    background: #1e293b;
+    border-color: #475569;
+    box-shadow: 0 12px 26px rgba(0, 0, 0, 0.34);
   }
+  [data-testid="stMetric"] {
+    background: #1e293b;
+    border: 1px solid #475569;
+    border-radius: 10px;
+    padding: 12px 14px;
+  }
+  [data-testid="stMetric"] *,
   .metric-title,
   .metric-desc,
   .feature-card p,
@@ -288,20 +486,20 @@ div.stTabs [data-baseweb="tab"] {
     color: #bae6fd;
   }
   .hydro-box {
-    background: #102638;
+    background: #1e293b;
     border-left-color: #22d3ee;
-    color: #e0f2fe;
-    border-top: 1px solid #1e3a56;
-    border-right: 1px solid #1e3a56;
-    border-bottom: 1px solid #1e3a56;
+    color: #f8fafc;
+    border-top: 1px solid #475569;
+    border-right: 1px solid #475569;
+    border-bottom: 1px solid #475569;
   }
   .warning-box {
-    background: #342713;
+    background: #422d12;
     border-left-color: #f59e0b;
-    color: #fde68a;
-    border-top: 1px solid #78350f;
-    border-right: 1px solid #78350f;
-    border-bottom: 1px solid #78350f;
+    color: #fffbeb;
+    border-top: 1px solid #92400e;
+    border-right: 1px solid #92400e;
+    border-bottom: 1px solid #92400e;
   }
   div.stButton > button,
   div.stDownloadButton > button {
@@ -318,66 +516,143 @@ div.stTabs [data-baseweb="tab"] {
     box-shadow: 0 10px 22px rgba(34, 211, 238, 0.28);
   }
   div.stTabs [data-baseweb="tab-list"] {
-    border-bottom: 1px solid #334155;
+    border-bottom: 1px solid #475569;
+    gap: 6px;
   }
-  div.stTabs [data-baseweb="tab"] {
-    background: #172033;
+  div.stTabs [data-baseweb="tab"],
+  div[data-baseweb="tab"] {
+    background: #1e293b;
     color: #cbd5e1;
-    border: 1px solid #334155;
+    border: 1px solid #475569;
     border-bottom: 0;
+    border-radius: 10px 10px 0 0;
   }
-  div.stTabs [aria-selected="true"] {
-    background: #0e7490 !important;
+  div.stTabs [aria-selected="true"],
+  div[data-baseweb="tab"][aria-selected="true"] {
+    background: #0891b2 !important;
     color: #ffffff !important;
     border-color: #67e8f9 !important;
+    box-shadow: inset 0 -3px 0 #a5f3fc;
   }
-  div[data-testid="stExpander"] {
-    background: #111827;
-    border: 1px solid #334155;
+  div[data-testid="stExpander"],
+  div[data-testid="stExpander"] details {
+    background: #111827 !important;
+    border: 1px solid #475569;
     border-radius: 10px;
+    color: #f8fafc !important;
   }
   div[data-testid="stExpander"] details summary {
-    background: #172033;
-    color: #f8fafc;
+    background: #1e293b !important;
+    color: #f8fafc !important;
     border-radius: 10px;
+    border-bottom: 1px solid #475569;
+  }
+  div[data-testid="stExpander"] details summary *,
+  div[data-testid="stExpander"] [data-testid="stMarkdownContainer"],
+  div[data-testid="stExpander"] label,
+  div[data-testid="stExpander"] p,
+  div[data-testid="stExpander"] span {
+    color: #f8fafc !important;
   }
   div[data-testid="stExpander"] details summary:hover {
-    background: #1f2a44;
+    background: #243449 !important;
   }
   [data-testid="stDataFrame"],
   [data-testid="stTable"],
+  [data-testid="stDataFrameResizable"],
+  [data-testid="stDataFrameGlideDataEditor"],
   div[data-testid="stDataFrame"] div,
   div[data-testid="stDataFrame"] canvas {
-    background-color: #111827;
-    color: #e5eef8;
+    background-color: #111827 !important;
+    color: #f8fafc !important;
   }
   div[data-testid="stDataFrame"] {
-    border: 1px solid #334155;
+    border: 1px solid #475569;
     border-radius: 8px;
+    overflow: hidden;
   }
-  table {
-    color: #e5eef8;
-    background: #111827;
-  }
-  thead tr, th {
-    background: #0f4c81 !important;
+  [data-testid="stDataFrame"] [role="grid"],
+  [data-testid="stDataFrame"] [role="row"],
+  [data-testid="stDataFrame"] [role="columnheader"],
+  [data-testid="stDataFrame"] [role="gridcell"] {
+    background-color: #111827 !important;
     color: #f8fafc !important;
-    border-color: #38bdf8 !important;
+    border-color: #475569 !important;
   }
+  [data-testid="stDataFrame"] [role="columnheader"] {
+    background-color: #334155 !important;
+    color: #f8fafc !important;
+    font-weight: 700;
+  }
+  [data-testid="stTable"] table,
+  div[data-testid="stTable"] table,
+  .data-table-wrap,
+  table {
+    color: #f8fafc !important;
+    background: #111827 !important;
+    border-collapse: collapse;
+  }
+  [data-testid="stTable"] thead tr,
+  [data-testid="stTable"] th,
+  thead tr, th {
+    background: #334155 !important;
+    color: #f8fafc !important;
+    border-color: #475569 !important;
+  }
+  [data-testid="stTable"] tbody tr,
+  [data-testid="stTable"] td,
   tbody tr, td {
-    background: #172033 !important;
-    color: #e5eef8 !important;
-    border-color: #334155 !important;
+    background: #1e293b !important;
+    color: #f8fafc !important;
+    border-color: #475569 !important;
   }
+  [data-testid="stTable"] tbody tr:nth-child(even) td,
   tbody tr:nth-child(even) td {
-    background: #1f2937 !important;
+    background: #111827 !important;
+  }
+  .dataframe,
+  .dataframe th,
+  .dataframe td,
+  .data-table,
+  .data-table th,
+  .data-table td {
+    color: #f8fafc !important;
+    border-color: #475569 !important;
+  }
+  .dataframe th,
+  .data-table th {
+    background: #334155 !important;
+  }
+  .dataframe td,
+  .data-table td {
+    background: #1e293b !important;
+  }
+  .data-table tr:nth-child(even) td {
+    background: #111827 !important;
+  }
+  .data-table td.cell-ok {
+    background: #14532d !important;
+    color: #dcfce7 !important;
+  }
+  .data-table td.cell-warn {
+    background: #78350f !important;
+    color: #ffedd5 !important;
+  }
+  .data-table td.cell-error {
+    background: #7f1d1d !important;
+    color: #fee2e2 !important;
   }
   [data-baseweb="input"],
   [data-baseweb="select"],
   [data-baseweb="textarea"],
   [data-baseweb="base-input"],
+  [data-baseweb="select"] > div,
+  [data-baseweb="popover"] ul,
+  [data-baseweb="menu"],
   div[data-testid="stNumberInput"] input,
-  div[data-testid="stTextInput"] input {
+  div[data-testid="stTextInput"] input,
+  div[data-testid="stSelectbox"] div,
+  div[data-testid="stDateInput"] input {
     background: #111827 !important;
     border-color: #475569 !important;
     color: #f8fafc !important;
@@ -385,15 +660,27 @@ div.stTabs [data-baseweb="tab"] {
   [data-baseweb="input"]:focus-within,
   [data-baseweb="select"]:focus-within,
   div[data-testid="stNumberInput"] input:focus,
-  div[data-testid="stTextInput"] input:focus {
+  div[data-testid="stTextInput"] input:focus,
+  div[data-testid="stDateInput"] input:focus {
     border-color: #67e8f9 !important;
     box-shadow: 0 0 0 1px #67e8f9;
   }
   input,
   textarea,
   [role="combobox"],
-  [data-baseweb="select"] span {
+  [data-baseweb="select"] span,
+  [data-baseweb="menu"] li,
+  [data-baseweb="popover"] li {
     color: #f8fafc !important;
+  }
+  input::placeholder,
+  textarea::placeholder {
+    color: #cbd5e1 !important;
+    opacity: 1;
+  }
+  [data-baseweb="menu"] li:hover,
+  [data-baseweb="popover"] li:hover {
+    background: #1e293b !important;
   }
   label,
   .stMarkdown,
@@ -401,6 +688,12 @@ div.stTabs [data-baseweb="tab"] {
   p,
   span {
     color: inherit;
+  }
+  label,
+  [data-testid="stWidgetLabel"],
+  [data-testid="stCaptionContainer"],
+  .stCaption {
+    color: #cbd5e1 !important;
   }
 }
 </style>
@@ -619,11 +912,36 @@ def build_result_tables(results: dict[str, Any], params: dict[str, Any]) -> dict
 
 
 def render_dataframe(df: pd.DataFrame) -> None:
-    styled = style_dataframe(df)
-    try:
-        st.dataframe(styled, width="stretch", hide_index=True)
-    except TypeError:
-        st.dataframe(styled, use_container_width=True, hide_index=True)
+    """用 HTML 表格统一渲染，保证深色模式下文字和边框清晰。"""
+    header = "".join(f"<th>{escape(str(column))}</th>" for column in df.columns)
+    rows = []
+    for _, row in df.iterrows():
+        cells = []
+        for value in row:
+            text = str(value)
+            cell_class = _table_cell_class(text)
+            class_attr = f' class="{cell_class}"' if cell_class else ""
+            cells.append(f"<td{class_attr}>{escape(text)}</td>")
+        rows.append("<tr>" + "".join(cells) + "</tr>")
+    table_html = f"""
+<div class="data-table-wrap">
+  <table class="data-table">
+    <thead><tr>{header}</tr></thead>
+    <tbody>{''.join(rows)}</tbody>
+  </table>
+</div>
+"""
+    st.markdown(table_html, unsafe_allow_html=True)
+
+
+def _table_cell_class(text: str) -> str:
+    if "不足" in text or "错误" in text or "不满足" in text:
+        return "cell-error"
+    if "偏保守" in text or "警告" in text or "需复核" in text:
+        return "cell-warn"
+    if "满足" in text or "合理" in text:
+        return "cell-ok"
+    return ""
 
 
 def render_chart(chart) -> None:
@@ -705,6 +1023,28 @@ def render_warning_box(text: str) -> None:
 
 def render_footer() -> None:
     st.markdown('<div class="footer">整体式单向板肋形楼盖设计辅助计算平台 · 课程设计版 v1.0 · 数据单位 kN / m / mm</div>', unsafe_allow_html=True)
+
+
+def render_sidebar_navigation() -> str:
+    """渲染分组式侧边栏导航，并返回当前内部页面名称。"""
+    if "current_page" not in st.session_state or st.session_state.current_page not in PAGES:
+        st.session_state.current_page = PAGES[0]
+    current_page = st.session_state.current_page
+    st.markdown('<div class="sidebar-nav">', unsafe_allow_html=True)
+    for group_name, items in NAV_GROUPS:
+        st.markdown(f'<div class="nav-group-title">【{escape(group_name)}】</div>', unsafe_allow_html=True)
+        for display_label, page_name in items:
+            if current_page == page_name:
+                emoji, text = display_label.split(" ", 1)
+                st.markdown(
+                    f'<div class="nav-item-selected"><span class="nav-emoji">{escape(emoji)}</span><span class="nav-text">{escape(text)}</span></div>',
+                    unsafe_allow_html=True,
+                )
+            elif st.button(display_label, key=f"nav_{page_name}", use_container_width=True):
+                st.session_state.current_page = page_name
+                st.rerun()
+    st.markdown("</div>", unsafe_allow_html=True)
+    return st.session_state.current_page
 
 
 def render_feature_cards(items: list[tuple[str, str]], columns: int = 3) -> None:
@@ -1357,7 +1697,7 @@ def main() -> None:
     with st.sidebar:
         st.markdown('<div class="sidebar-title">楼盖设计辅助平台</div><div class="sidebar-subtitle">水工钢筋混凝土课程设计</div>', unsafe_allow_html=True)
         presentation_mode = st.toggle("答辩展示模式", value=False, help="开启后隐藏过多输入细节，优先展示关键结果和讲解词。")
-        page = st.radio("导航栏", PAGES)
+        page = render_sidebar_navigation()
         st.divider()
         st.caption("统一参数保存在 session_state，所有页面共享。")
         st.markdown("课程设计版 v1.0  \n数据单位：kN、m、mm")
