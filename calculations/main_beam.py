@@ -12,6 +12,7 @@ from calculations.secondary_beam import (
     estimate_stirrups,
 )
 from calculations.slab import calculate_required_as
+from calculations.matrix_stiffness import BeamElement, BeamNode, NodalLoad, elastic_flexural_rigidity_kN_m2, solve_continuous_beam
 
 
 @dataclass(frozen=True)
@@ -38,6 +39,8 @@ class MainBeamInput:
     fyv: float = 270
     h0_mm: float = 600
     section_name: str = "跨中"
+    elastic_modulus_mpa: float = 25500
+    stiffness_factor: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -101,10 +104,6 @@ def validate_main_beam_input(data: MainBeamInput) -> None:
         if value < 0:
             raise ValueError(f"{name}不能为负数")
 
-    if data.alpha == 0:
-        raise ValueError("弯矩系数 alpha 不能为 0")
-    if data.beta == 0:
-        raise ValueError("剪力系数 beta 不能为 0")
     if data.h_mm <= data.hf_mm:
         raise ValueError("主梁高度 h 应大于板厚 hf")
     if data.h0_mm >= data.h_mm:
@@ -160,7 +159,7 @@ def calculate_main_beam_loads(data: MainBeamInput) -> dict[str, float]:
 
 def calculate_point_moment(alpha: float, p_kN: float, l0_m: float) -> float:
     """
-    计算主梁控制截面弯矩。
+    旧手算对比：按集中荷载系数计算主梁弯矩，不参与正式设计链路。
 
     课程设计基本版按集中荷载系数计算：
     M = alpha * P * l0
@@ -177,7 +176,7 @@ def calculate_point_moment(alpha: float, p_kN: float, l0_m: float) -> float:
 
 def calculate_point_shear(beta: float, p_kN: float) -> float:
     """
-    计算主梁控制截面剪力。
+    旧手算对比：按集中荷载系数计算主梁剪力，不参与正式设计链路。
 
     课程设计基本版按集中荷载系数计算：
     V = beta * P
@@ -190,15 +189,18 @@ def calculate_point_shear(beta: float, p_kN: float) -> float:
 
 
 def calculate_main_beam(data: MainBeamInput) -> MainBeamResult:
-    """完成主梁从荷载、内力到纵筋和箍筋的完整计算。"""
+    """完成主梁基础计算；集中荷载内力由统一矩阵刚度求解器获得。"""
     validate_main_beam_input(data)
     loads = calculate_main_beam_loads(data)
-    moment = calculate_point_moment(
-        data.alpha,
-        loads["total_concentrated_design_kN"],
-        data.l0_m,
+    mid = data.l0_m / 2
+    ei = elastic_flexural_rigidity_kN_m2(data.elastic_modulus_mpa, data.b_mm, data.h_mm, data.stiffness_factor)
+    analysis = solve_continuous_beam(
+        [BeamNode(0, 0.0, True), BeamNode(1, mid), BeamNode(2, data.l0_m, True)],
+        [BeamElement(0, 0, 1, ei), BeamElement(1, 1, 2, ei)],
+        [NodalLoad(1, loads["total_concentrated_design_kN"])],
     )
-    shear = calculate_point_shear(data.beta, loads["total_concentrated_design_kN"])
+    moment = analysis.force_at(mid, "left").moment_kN_m
+    shear = analysis.force_at(0.0, "right").shear_kN
     required_as, x_mm = calculate_required_as(moment, data.fc, data.fy, data.b_mm, data.h0_mm)
     vc_kN, required_av_over_s = estimate_stirrups(
         shear,

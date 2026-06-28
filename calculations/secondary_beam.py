@@ -6,7 +6,8 @@ import math
 from dataclasses import dataclass
 
 from calculations.rebar import bar_area, recommend_longitudinal_rebar, recommend_stirrups
-from calculations.slab import calculate_moment, calculate_required_as
+from calculations.slab import calculate_required_as
+from calculations.matrix_stiffness import BeamElement, BeamNode, elastic_flexural_rigidity_kN_m2, solve_continuous_beam
 
 
 @dataclass(frozen=True)
@@ -58,6 +59,8 @@ class SecondaryBeamInput:
     fyv: float = 270
     h0_mm: float = 360
     section_name: str = "跨中"
+    elastic_modulus_mpa: float = 25500
+    stiffness_factor: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -120,10 +123,6 @@ def validate_secondary_beam_input(data: SecondaryBeamInput) -> None:
         if value < 0:
             raise ValueError(f"{name}不能为负数")
 
-    if data.alpha == 0:
-        raise ValueError("弯矩系数 alpha 不能为 0")
-    if data.beta == 0:
-        raise ValueError("剪力系数 beta 不能为 0")
     if data.h_mm <= data.hf_mm:
         raise ValueError("次梁高度 h 应大于板厚 hf")
     if data.h0_mm >= data.h_mm:
@@ -168,7 +167,7 @@ def calculate_secondary_beam_loads(data: SecondaryBeamInput) -> dict[str, float]
 
 def calculate_shear(beta: float, q_kN_m: float, l0_m: float) -> float:
     """
-    计算控制截面剪力。
+    旧手算对比：按经验系数计算剪力，不参与正式设计链路。
 
     V = beta * q * l0
     q 单位为 kN/m，l0 单位为 m，因此 V 单位为 kN。
@@ -257,11 +256,16 @@ def check_stirrup_options(required_av_over_s: float) -> list[StirrupOption]:
 
 
 def calculate_secondary_beam(data: SecondaryBeamInput) -> SecondaryBeamResult:
-    """完成次梁从荷载、内力到纵筋和箍筋的完整计算。"""
+    """完成次梁基础计算；内力由统一矩阵刚度求解器获得。"""
     validate_secondary_beam_input(data)
     loads = calculate_secondary_beam_loads(data)
-    moment = calculate_moment(data.alpha, loads["total_line_load_design_kN_m"], data.l0_m)
-    shear = calculate_shear(data.beta, loads["total_line_load_design_kN_m"], data.l0_m)
+    ei = elastic_flexural_rigidity_kN_m2(data.elastic_modulus_mpa, data.b_mm, data.h_mm, data.stiffness_factor)
+    analysis = solve_continuous_beam(
+        [BeamNode(0, 0.0, True), BeamNode(1, data.l0_m, True)],
+        [BeamElement(0, 0, 1, ei, loads["total_line_load_design_kN_m"])],
+    )
+    moment = analysis.force_at(data.l0_m / 2).moment_kN_m
+    shear = analysis.force_at(0.0, "right").shear_kN
     required_as, x_mm = calculate_required_as(moment, data.fc, data.fy, data.b_mm, data.h0_mm)
     vc_kN, required_av_over_s = estimate_stirrups(
         shear,

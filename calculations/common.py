@@ -62,9 +62,27 @@ class DesignParameters:
     main_b_mm: float = 300.0
     main_h_mm: float = 650.0
     main_h0_mm: float = 600.0
+    secondary_flange_width_mm: float = 0.0
+    main_flange_width_mm: float = 0.0
     slab_span_m: float = 2.0
     secondary_span_m: float = 6.0
     main_span_m: float = 6.0
+    slab_spans_text: str = "2,2,2"
+    secondary_spans_text: str = "6,6,6,6,6"
+    main_spans_text: str = "6,6,6"
+    slab_supports_text: str = "pin,pin,pin,pin"
+    secondary_supports_text: str = "pin,pin,pin,pin,pin,pin"
+    main_supports_text: str = "pin,pin,pin,pin"
+    slab_live_spans_text: str = "1,2,3"
+    secondary_live_spans_text: str = "1,2,3,4,5"
+    main_live_spans_text: str = "1,2,3"
+    main_point_positions_text: str = ""
+    secondary_to_main_support_number: int = 3
+    elastic_modulus_mpa: float = 25500.0
+    slab_stiffness_factor: float = 1.0
+    secondary_stiffness_factor: float = 1.0
+    main_stiffness_factor: float = 1.0
+    automatic_live_patterns: bool = True
 
     def to_dict(self) -> dict[str, float | str]:
         """返回可用于表格和导出的普通字典。"""
