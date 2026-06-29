@@ -5,8 +5,6 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from calculations.specification_parameters import COURSE_SPEC
-
 
 @dataclass(frozen=True)
 class RebarOption:
@@ -83,25 +81,6 @@ def evaluate_rebar(provided: float, required: float) -> tuple[bool, float, str]:
     return True, ratio, "合理"
 
 
-def longitudinal_bars_fit(
-    b_mm: float,
-    count: int,
-    diameter_mm: float,
-    max_layers: int = 2,
-    cover_mm: float = COURSE_SPEC.beam_cover_mm,
-    stirrup_diameter_mm: float = COURSE_SPEC.stirrup_diameter_mm,
-) -> bool:
-    """按保护层、箍筋直径和钢筋净距判断纵筋能否在梁内布置。"""
-    if min(b_mm, count, diameter_mm, max_layers) <= 0:
-        return False
-    clear_width = b_mm - 2 * (cover_mm + stirrup_diameter_mm)
-    clear_spacing = max(COURSE_SPEC.min_clear_bar_spacing_mm, diameter_mm)
-    if clear_width < diameter_mm:
-        return False
-    per_layer = int((clear_width + clear_spacing) // (diameter_mm + clear_spacing))
-    return per_layer > 0 and count <= per_layer * max_layers
-
-
 def check_rebar_options(
     required_as_mm2_per_m: float,
     options: list[tuple[float, float]] | None = None,
@@ -140,7 +119,6 @@ def check_rebar_options(
 def recommend_longitudinal_rebar(
     required_as_mm2: float,
     options: list[tuple[int, int]] | None = None,
-    b_mm: float | None = None,
 ) -> list[LongitudinalOption]:
     """推荐常见梁纵筋方案。"""
     if required_as_mm2 < 0:
@@ -153,9 +131,6 @@ def recommend_longitudinal_rebar(
     for count, diameter in options:
         area = count * bar_area(diameter)
         is_ok, over_ratio, evaluation = evaluate_rebar(area, required_as_mm2)
-        if b_mm is not None and not longitudinal_bars_fit(b_mm, count, diameter):
-            is_ok = False
-            evaluation = "不可布置：净宽、保护层、箍筋或钢筋净距不足"
         results.append(
             LongitudinalOption(
                 name=f"{count}φ{diameter}",

@@ -5,7 +5,6 @@ from __future__ import annotations
 from datetime import date
 from io import BytesIO
 from typing import Any
-from xml.sax.saxutils import escape
 
 import pandas as pd
 from reportlab.lib import colors
@@ -14,28 +13,22 @@ from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
-from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import Image, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
+from calculations.load_combination import analyze_load_combinations
 from calculations.moment_capacity import build_resisting_moment_points, calculate_moment_capacity
 from calculations.rebar import recommend_longitudinal_rebar
 from charts.plot_moment import figure_to_png_bytes, plot_moment_diagram
 from charts.plot_resisting_moment import plot_resisting_moment_diagram
 from charts.plot_shear import plot_shear_diagram
-from charts.plot_control_sections import plot_control_section_diagram
-from charts.plot_force_envelope import plot_matrix_moment_envelope, plot_matrix_shear_envelope
 
 
 def _register_fonts() -> str:
-    font_name = "ChineseEmbedded"
+    font_name = "STSong-Light"
     try:
-        pdfmetrics.registerFont(TTFont(font_name, "/System/Library/Fonts/Supplemental/Arial Unicode.ttf"))
+        pdfmetrics.registerFont(UnicodeCIDFont(font_name))
     except Exception:
-        font_name = "STSong-Light"
-        try:
-            pdfmetrics.registerFont(UnicodeCIDFont(font_name))
-        except Exception:
-            pass
+        pass
     return font_name
 
 
@@ -57,51 +50,20 @@ def _table_from_dataframe(df: pd.DataFrame, font_name: str, max_rows: int | None
     table_df = df.copy()
     if max_rows is not None:
         table_df = table_df.head(max_rows)
-    # 宽表按列拆成续表，避免 17/22 列直接挤入 A4 竖版。
-    max_columns = 7
-    identity = [column for column in ("构件", "跨号", "截面编号", "截面名称", "全局工况") if column in table_df.columns][:2]
-    remaining = [column for column in table_df.columns if column not in identity]
-    chunks = [identity + remaining[i:i + max_columns - len(identity)] for i in range(0, len(remaining), max_columns - len(identity))] or [identity]
-    body_style = ParagraphStyle("CnTableBody", fontName=font_name, fontSize=6.2, leading=8, wordWrap="CJK")
-    header_style = ParagraphStyle("CnTableHeader", fontName=font_name, fontSize=6.4, leading=8, textColor=colors.white, wordWrap="CJK")
-    data: list[list[Any]] = []
-    header_rows: list[int] = []
-    continuation_rows: list[int] = []
-    def cell(value: Any, style: ParagraphStyle) -> Paragraph:
-        return Paragraph(escape(str(value)).replace("\n", "<br/>"), style)
-    for chunk_index, columns in enumerate(chunks):
-        if chunk_index:
-            continuation_rows.append(len(data))
-            data.append([cell("续表（同一数据表按列拆分）", body_style)] + [""] * (max_columns - 1))
-        header_rows.append(len(data))
-        data.append([cell(column, header_style) for column in columns] + [""] * (max_columns - len(columns)))
-        for row in table_df[columns].to_numpy().tolist():
-            data.append([cell(value, body_style) for value in row] + [""] * (max_columns - len(row)))
-    if identity:
-        widths = [18 * mm] * len(identity) + [(174 - 18 * len(identity)) * mm / (max_columns - len(identity))] * (max_columns - len(identity))
-    else:
-        widths = [174 * mm / max_columns] * max_columns
-    table = Table(data, repeatRows=0, colWidths=widths, splitByRow=True)
-    dynamic_styles = []
-    for row_index in header_rows:
-        dynamic_styles.extend([
-            ("BACKGROUND", (0, row_index), (-1, row_index), colors.HexColor("#0f4c81")),
-            ("TEXTCOLOR", (0, row_index), (-1, row_index), colors.white),
-        ])
-    for row_index in continuation_rows:
-        dynamic_styles.extend([
-            ("SPAN", (0, row_index), (-1, row_index)),
-            ("BACKGROUND", (0, row_index), (-1, row_index), colors.HexColor("#e6eef5")),
-        ])
+    data = [[str(column) for column in table_df.columns]]
+    data.extend([[str(value) for value in row] for row in table_df.to_numpy().tolist()])
+    table = Table(data, repeatRows=1)
     table.setStyle(
         TableStyle(
             [
                 ("FONTNAME", (0, 0), (-1, -1), font_name),
                 ("FONTSIZE", (0, 0), (-1, -1), 7),
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0f4c81")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
                 ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#d8e3ec")),
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
                 ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f6f8fb")]),
-            ] + dynamic_styles
+            ]
         )
     )
     return table
@@ -121,40 +83,70 @@ def _draw_page_background(canvas, doc) -> None:
     canvas.setFillColor(colors.white)
     canvas.rect(0, 0, width, height, fill=1, stroke=0)
     canvas.setFillColor(colors.HexColor("#60758a"))
-    canvas.setFont("ChineseEmbedded" if "ChineseEmbedded" in pdfmetrics.getRegisteredFontNames() else "STSong-Light", 8)
+    canvas.setFont("STSong-Light", 8)
     canvas.drawRightString(width - 18 * mm, 8 * mm, f"第 {doc.page} 页")
     canvas.restoreState()
 
 
-def _component_chart_bytes(results: dict[str, Any], member_key: str) -> tuple[bytes, bytes, bytes]:
-    matrix = getattr(results["matrix"], member_key)
-    control = plot_control_section_diagram(matrix)
-    moment = plot_matrix_moment_envelope(matrix)
-    shear = plot_matrix_shear_envelope(matrix)
-    return figure_to_png_bytes(control), figure_to_png_bytes(moment), figure_to_png_bytes(shear)
+def _component_chart_bytes(results: dict[str, Any], member_key: str) -> tuple[bytes, bytes]:
+    if member_key == "slab":
+        result = results["slab"]
+        labels = ["左支座", "跨中", "右支座"]
+        xs = [0.0, result.input.l0_m / 2, result.input.l0_m]
+        moments = [-abs(result.moment_kN_m) * 0.85, result.moment_kN_m, -abs(result.moment_kN_m) * 0.85]
+        shears = [result.line_load_design_kN_m * result.input.l0_m * 0.5, 0.0, -result.line_load_design_kN_m * result.input.l0_m * 0.5]
+        moment_kind = "quadratic"
+        shear_mode = "linear"
+        title_prefix = "板"
+    elif member_key == "secondary":
+        result = results["secondary"]
+        labels = ["左支座", "跨中", "右支座"]
+        xs = [0.0, result.input.l0_m / 2, result.input.l0_m]
+        moments = [-abs(result.moment_kN_m) * 0.85, result.moment_kN_m, -abs(result.moment_kN_m) * 0.85]
+        shears = [result.shear_kN, 0.0, -result.shear_kN]
+        moment_kind = "quadratic"
+        shear_mode = "linear"
+        title_prefix = "次梁"
+    else:
+        result = results["main"]
+        labels = ["左支座", "跨中", "右支座"]
+        xs = [0.0, result.input.l0_m / 2, result.input.l0_m]
+        moments = [-abs(result.moment_kN_m) * 0.85, result.moment_kN_m, -abs(result.moment_kN_m) * 0.85]
+        shears = [result.shear_kN, 0.0, -result.shear_kN]
+        moment_kind = "control_polyline"
+        shear_mode = "step"
+        title_prefix = "主梁"
+    moment_chart = plot_moment_diagram(xs, moments, labels, f"{title_prefix}弯矩图", curve_kind=moment_kind)
+    shear_chart = plot_shear_diagram(xs, shears, labels, f"{title_prefix}剪力图", mode=shear_mode)
+    return figure_to_png_bytes(moment_chart), figure_to_png_bytes(shear_chart)
 
 
 def _resisting_chart_bytes(results: dict[str, Any], member_key: str) -> bytes:
-    result = results[member_key]
-    design = getattr(results["matrix"], f"{member_key}_design_df")
-    capacities = []
-    for _, row in design.iterrows():
-        area = float(row["实配面积 (mm2)"])
-        capacity = calculate_moment_capacity(area, result.input.fc, result.input.fy, result.input.b_mm, result.input.h0_mm) if area > 0 else 0.0
-        capacities.append(-capacity if row["设计方向"] == "负弯矩" else capacity)
+    result = results["secondary"] if member_key == "secondary" else results["main"]
+    positive_option = next((item for item in result.longitudinal_options if item.is_ok), result.longitudinal_options[-1])
+    negative_option = next((item for item in recommend_longitudinal_rebar(result.required_as_mm2 * 1.05) if item.is_ok), positive_option)
+    positive_mu = calculate_moment_capacity(positive_option.area_mm2, result.input.fc, result.input.fy, result.input.b_mm, result.input.h0_mm)
+    negative_mu = calculate_moment_capacity(negative_option.area_mm2, result.input.fc, result.input.fy, result.input.b_mm, result.input.h0_mm)
+    points = build_resisting_moment_points(result.input.l0_m, abs(result.moment_kN_m), -abs(result.moment_kN_m) * 0.85, positive_mu, negative_mu)
     chart = plot_resisting_moment_diagram(
-        design["x (m)"].astype(float).tolist(),
-        design["M (kN·m)"].astype(float).tolist(),
-        capacities,
-        [f"{row['截面编号']}-{row['设计方向']}" for _, row in design.iterrows()],
-        "逐控制截面抵抗弯矩图",
+        [p.x_m for p in points],
+        [p.design_moment_kN_m for p in points],
+        [p.capacity_kN_m for p in points],
+        [p.position for p in points],
+        "简化抵抗弯矩图",
     )
     return figure_to_png_bytes(chart)
 
 
 def _combination_chart_bytes(results: dict[str, Any], member: str) -> tuple[bytes, bytes]:
-    matrix = {"板": results["matrix"].slab, "次梁": results["matrix"].secondary, "主梁": results["matrix"].main}[member]
-    return figure_to_png_bytes(plot_matrix_moment_envelope(matrix)), figure_to_png_bytes(plot_matrix_shear_envelope(matrix))
+    analysis = analyze_load_combinations(member, results)
+    labels = analysis.moment_envelope_df["截面位置"].tolist()
+    xs = analysis.moment_envelope_df["x (m)"].astype(float).tolist()
+    moments = analysis.moment_envelope_df["最大弯矩包络 (kN·m)"].astype(float).tolist()
+    shears = analysis.shear_envelope_df["最大剪力包络 (kN)"].astype(float).tolist()
+    moment_chart = plot_moment_diagram(xs, moments, labels, f"{member}最大弯矩包络图")
+    shear_chart = plot_shear_diagram(xs, shears, labels, f"{member}最大剪力包络图")
+    return figure_to_png_bytes(moment_chart), figure_to_png_bytes(shear_chart)
 
 
 def build_pdf_report(student_info: dict[str, str], params: dict[str, Any], tables: dict[str, pd.DataFrame], results: dict[str, Any]) -> bytes:
@@ -185,27 +177,24 @@ def build_pdf_report(student_info: dict[str, str], params: dict[str, Any], table
     story.append(_paragraph("一、基本参数", styles["h1"]))
     story.append(_table_from_dataframe(tables["基本参数"], font_name, max_rows=32))
     story.append(_paragraph("二、楼盖尺寸、荷载参数和材料参数", styles["h1"]))
-    for table_name in ["板荷载", "矩阵荷载逐级传递", "截面尺寸初估"]:
+    for table_name in ["板荷载", "次梁荷载", "主梁荷载", "截面尺寸初估"]:
         story.append(_paragraph(table_name, styles["h2"]))
         story.append(_table_from_dataframe(tables[table_name], font_name))
         story.append(Spacer(1, 6))
 
     story.append(PageBreak())
     component_sections = [
-        ("三、板矩阵刚度计算", "slab", ["板矩阵荷载表", "板总刚度矩阵摘要", "板支座反力表", "板控制截面内力包络表", "板逐控制截面配筋表"]),
-        ("四、次梁矩阵刚度计算", "secondary", ["次梁矩阵荷载表", "次梁总刚度矩阵摘要", "次梁支座反力表", "次梁控制截面内力包络表", "次梁逐控制截面配筋表"]),
-        ("五、主梁矩阵刚度计算", "main", ["主梁矩阵荷载表", "主梁总刚度矩阵摘要", "主梁支座反力表", "主梁控制截面内力包络表", "主梁逐控制截面配筋表"]),
+        ("三、板计算过程", "slab", ["板荷载", "板内力与配筋", "板推荐配筋"]),
+        ("四、次梁计算过程", "secondary", ["次梁荷载", "次梁内力与配筋", "次梁推荐纵筋", "次梁推荐箍筋"]),
+        ("五、主梁计算过程", "main", ["主梁荷载", "主梁内力与配筋", "主梁推荐纵筋", "主梁推荐箍筋"]),
     ]
     for heading, key, table_names in component_sections:
         story.append(_paragraph(heading, styles["h1"]))
         for table_name in table_names:
             story.append(_paragraph(table_name, styles["h2"]))
-            story.append(_table_from_dataframe(tables[table_name], font_name, max_rows=30))
+            story.append(_table_from_dataframe(tables[table_name], font_name))
             story.append(Spacer(1, 5))
-        control_png, moment_png, shear_png = _component_chart_bytes(results, key)
-        direction_title = {"slab": "板控制截面示意图（板计算方向）", "secondary": "次梁控制截面示意图（30m方向）", "main": "主梁控制截面示意图（18m方向）"}[key]
-        story.append(_paragraph(direction_title, styles["h2"]))
-        story.append(_image_from_png(control_png))
+        moment_png, shear_png = _component_chart_bytes(results, key)
         story.append(_paragraph("弯矩图", styles["h2"]))
         story.append(_image_from_png(moment_png))
         story.append(_paragraph("剪力图", styles["h2"]))
@@ -214,8 +203,9 @@ def build_pdf_report(student_info: dict[str, str], params: dict[str, Any], table
 
     story.append(_paragraph("六、最不利荷载组合与包络图", styles["h1"]))
     for member in ["板", "次梁", "主梁"]:
+        analysis = analyze_load_combinations(member, results)
         story.append(_paragraph(f"{member}最不利荷载组合", styles["h2"]))
-        story.append(_table_from_dataframe(tables[f"{member}控制截面内力包络表"], font_name, max_rows=30))
+        story.append(_table_from_dataframe(analysis.summary_df, font_name))
         moment_png, shear_png = _combination_chart_bytes(results, member)
         story.append(_paragraph("最大弯矩包络图", styles["h2"]))
         story.append(_image_from_png(moment_png))
@@ -228,7 +218,7 @@ def build_pdf_report(student_info: dict[str, str], params: dict[str, Any], table
     for member_name, key in [("次梁", "secondary"), ("主梁", "main")]:
         story.append(_paragraph(f"{member_name}抵抗弯矩图", styles["h2"]))
         story.append(_image_from_png(_resisting_chart_bytes(results, key)))
-    for table_name in ["板逐控制截面配筋表", "次梁逐控制截面配筋表", "主梁逐控制截面配筋表"]:
+    for table_name in ["板推荐配筋", "次梁推荐纵筋", "次梁推荐箍筋", "主梁推荐纵筋", "主梁推荐箍筋"]:
         story.append(_paragraph(table_name, styles["h2"]))
         story.append(_table_from_dataframe(tables[table_name], font_name))
         story.append(Spacer(1, 5))
@@ -236,7 +226,7 @@ def build_pdf_report(student_info: dict[str, str], params: dict[str, Any], table
     story.append(_paragraph("八、设计结论", styles["h1"]))
     story.append(
         _paragraph(
-            "本计算书依据当前输入参数自动生成。板、次梁、主梁采用 Euler-Bernoulli 梁单元矩阵刚度法计算内力；同一全局工况中，板带支座反力除以板带宽度后逐支承线传给次梁，次梁支座反力再按实际交点传给主梁。控制截面同时保留支座中心与真实支座边缘，支座中心用于负弯矩检查，边缘用于面内弯矩和剪力检查。梁跨中正弯矩按 T 形截面、支座负弯矩按矩形截面判断；翼缘有效宽度、抗剪和构造参数仍按课程近似值估算，需人工按采用规范复核。当前正式逐线传力仅支持规则等跨楼盖。",
+            "本计算书依据当前输入参数自动生成，完成了板、次梁、主梁的荷载计算、内力计算、配筋计算、图形展示和最不利荷载组合分析。程序结果用于课程设计辅助整理，最终提交前仍应结合教材、规范和教师要求进行人工复核。",
             styles["body"],
         )
     )

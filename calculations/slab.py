@@ -5,7 +5,6 @@ from __future__ import annotations
 import math
 from dataclasses import asdict, dataclass
 
-from calculations.matrix_stiffness import BeamElement, BeamNode, elastic_flexural_rigidity_kN_m2, solve_continuous_beam
 from calculations.rebar import RebarOption, check_rebar_options
 
 
@@ -28,8 +27,6 @@ class SlabInput:
     fy: float = 300
     h0_mm: float = 60
     section_name: str = "跨中"
-    elastic_modulus_mpa: float = 25500
-    stiffness_factor: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -77,6 +74,8 @@ def validate_slab_input(data: SlabInput) -> None:
         if value < 0:
             raise ValueError(f"{name}不能为负数")
 
+    if data.alpha == 0:
+        raise ValueError("弯矩系数 alpha 不能为 0")
     if data.h0_mm >= data.h_mm:
         raise ValueError("截面有效高度 h0 应小于板厚 h")
 
@@ -111,7 +110,7 @@ def calculate_loads(data: SlabInput) -> dict[str, float]:
 
 def calculate_moment(alpha: float, q_kN_m: float, l0_m: float) -> float:
     """
-    旧手算对比：按经验系数计算控制截面弯矩，不参与正式设计链路。
+    计算控制截面弯矩。
 
     M = alpha * q * l0^2
     q 单位为 kN/m，l0 单位为 m，因此 M 单位为 kN·m。
@@ -159,16 +158,11 @@ def calculate_required_as(
 
 
 def calculate_slab(data: SlabInput) -> SlabResult:
-    """完成单向板基础计算；内力由统一矩阵刚度求解器获得。"""
+    """完成单向板从荷载、弯矩到配筋的完整计算。"""
     validate_slab_input(data)
     loads = calculate_loads(data)
+    moment = calculate_moment(data.alpha, loads["line_load_design_kN_m"], data.l0_m)
     b_mm = data.strip_width_m * 1000
-    ei = elastic_flexural_rigidity_kN_m2(data.elastic_modulus_mpa, b_mm, data.h_mm, data.stiffness_factor)
-    analysis = solve_continuous_beam(
-        [BeamNode(0, 0.0, True), BeamNode(1, data.l0_m, True)],
-        [BeamElement(0, 0, 1, ei, loads["line_load_design_kN_m"])],
-    )
-    moment = analysis.force_at(data.l0_m / 2).moment_kN_m
     required_as, x_mm = calculate_required_as(moment, data.fc, data.fy, b_mm, data.h0_mm)
     options = check_rebar_options(required_as)
 
