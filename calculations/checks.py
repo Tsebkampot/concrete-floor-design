@@ -66,7 +66,7 @@ def check_design_parameters(params: dict, has_results: dict[str, bool] | None = 
     if not has_results.get("manual_compare", False):
         add("提示", "手算对比", "手算对比", "程序结果不能替代手算复核", "保留测试算例与手算对比模块")
 
-    add("提示", "适用范围", "简化方法", "内力包络、抗剪和抵抗弯矩图采用课程设计简化方法", "最终结果需按教材或规范人工复核")
+    add("提示", "适用范围", "矩阵刚度法", "正式内力采用线弹性连续梁矩阵刚度法；配筋构造和抗剪仍含课程设计默认值", "按采用规范复核最小配筋、裂缝、挠度、锚固和箍筋")
     return items
 
 

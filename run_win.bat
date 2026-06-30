@@ -34,10 +34,11 @@ echo Python:
 python --version
 echo.
 echo Starting Streamlit...
-echo If the browser does not open, visit http://localhost:8501
+echo An available local port will be selected automatically.
+echo If the browser does not open, use the Local URL shown below.
 echo.
 
-python -m streamlit run app.py
+python -m streamlit run app.py --server.port 0
 set RUN_STATUS=%errorlevel%
 
 echo.

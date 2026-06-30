@@ -1,6 +1,8 @@
 """只读校核报告对应的回归测试。"""
 
+from copy import deepcopy
 from io import BytesIO
+from pathlib import Path
 from types import SimpleNamespace
 import zipfile
 
@@ -19,10 +21,62 @@ from calculations.slab import SlabInput, calculate_loads
 from calculations.structural_models import ContinuousMemberModel, MemberPointLoad, analyze_member
 from charts.plot_control_sections import plot_control_section_diagram
 from export.export_excel import build_excel_workbook
+from export.export_pdf import build_pdf_report
+from export.export_report import build_markdown_report
+from export.report_summary import REPORT_SUMMARY_COLUMNS, build_calculation_book_tables
 from export.export_word import build_word_report
 
 
 EI = 100_000.0
+
+
+def _params_with(**updates):
+    params = deepcopy(default_parameters().to_dict())
+    params.update(updates)
+    return params
+
+
+def _large_21x36_params(**updates):
+    params = _params_with(
+        l1_m=21.0,
+        l2_m=36.0,
+        slab_span_m=3.5,
+        secondary_span_m=9.0,
+        main_span_m=7.0,
+        slab_spans_text="3,4",
+        slab_supports_text="pin,pin,pin",
+        slab_live_spans_text="1,2",
+        secondary_spans_text="9,9,9,9",
+        secondary_supports_text="pin,pin,pin,pin,pin",
+        secondary_live_spans_text="1,2,3,4",
+        main_spans_text="7,7,7",
+        main_supports_text="pin,pin,pin,pin",
+        main_live_spans_text="1,2,3",
+    )
+    params.update(updates)
+    return params
+
+
+def _manual_20x28_params(**updates):
+    params = _params_with(
+        l1_m=20.0,
+        l2_m=28.0,
+        slab_span_m=2.5,
+        secondary_span_m=7.0,
+        main_span_m=5.0,
+        slab_spans_text="2.5,2.5",
+        slab_supports_text="pin,pin,pin",
+        slab_live_spans_text="1",
+        secondary_spans_text="7,7,7,7",
+        secondary_supports_text="pin,pin,pin,pin,pin",
+        secondary_live_spans_text="2,4",
+        main_spans_text="5,5,5,5",
+        main_supports_text="pin,pin,pin,pin,pin",
+        main_live_spans_text="1,3",
+        automatic_live_patterns=False,
+    )
+    params.update(updates)
+    return params
 
 
 def _slab_model(strip_width: float, spans=(2.0, 2.0, 2.0)) -> ContinuousMemberModel:
@@ -100,6 +154,58 @@ def test_failed_input_invalidates_current_result_and_blocks_export() -> None:
     assert state.latest_results == {"old": True}
 
 
+def test_large_span_default_secondary_section_reports_actionable_context() -> None:
+    params = _large_21x36_params()
+    with pytest.raises(ValueError) as exc_info:
+        app.calculate_project_results(params)
+    message = str(exc_info.value)
+    assert "次梁计算失败" in message
+    assert "弯矩过大" in message
+    assert "次梁各跨=9,9,9,9 m" in message
+    assert "截面 b×h=150×400 mm" in message
+    assert "h0=360 mm" in message
+    assert "增大次梁高度" in message
+
+
+def test_manual_live_span_default_secondary_section_reports_actionable_context() -> None:
+    params = _manual_20x28_params()
+    with pytest.raises(ValueError) as exc_info:
+        app.calculate_project_results(params)
+    message = str(exc_info.value)
+    assert "次梁计算失败" in message
+    assert "次梁各跨=7,7,7,7 m" in message
+    assert "单跨兼容计算跨度=7 m" in message
+    assert "不要沿用默认小截面" in message
+
+
+def test_larger_regular_span_sections_can_complete_after_section_adjustment() -> None:
+    params = _large_21x36_params(
+        slab_h_mm=120.0,
+        slab_h0_mm=95.0,
+        secondary_b_mm=250.0,
+        secondary_h_mm=650.0,
+        secondary_h0_mm=600.0,
+        main_b_mm=350.0,
+        main_h_mm=800.0,
+        main_h0_mm=750.0,
+    )
+    results = app.calculate_project_results(params)
+    tables = app.build_result_tables(results, params)
+    assert results["matrix"].main.model.boundaries_m[-1] == pytest.approx(21.0)
+    assert "计算数据总表" in build_calculation_book_tables(params, tables, results)
+
+
+def test_unsupported_irregular_main_spans_are_still_rejected_with_layout_context() -> None:
+    params = _params_with(main_spans_text="6,7,5", main_supports_text="pin,pin,pin,pin")
+    with pytest.raises(ValueError) as exc_info:
+        app.calculate_project_results(params)
+    message = str(exc_info.value)
+    assert "矩阵分析计算失败" in message
+    assert "仅支持规则等跨主梁楼盖" in message
+    assert "主梁=6,7,5 m" in message
+    assert "支承数量等于跨数+1" in message
+
+
 def test_extremely_narrow_beam_has_no_satisfactory_bar_layout() -> None:
     options = recommend_longitudinal_rebar(200.0, b_mm=50.0)
     assert options and not any(option.is_ok for option in options)
@@ -159,3 +265,37 @@ def test_word_wide_table_is_split_into_readable_subtables() -> None:
         xml = archive.read("word/document.xml").decode("utf-8")
     assert "续表（同一数据表按列拆分）" in xml
     assert xml.count("<w:gridCol") >= 22
+
+
+def test_calculation_book_exports_summary_tables_instead_of_full_matrix_dump() -> None:
+    params = default_parameters().to_dict()
+    results = app.calculate_project_results(params)
+    tables = app.build_result_tables(results, params)
+    report_tables = build_calculation_book_tables(params, tables, results)
+
+    assert list(report_tables["计算数据总表"].columns) == REPORT_SUMMARY_COLUMNS
+    assert {"计算数据总表", "复核说明", "主梁补充数据"} == set(report_tables)
+    assert "主梁控制剪力" in report_tables["主梁补充数据"]["项目"].to_string()
+
+    markdown = build_markdown_report("计算书回归", report_tables)
+    assert "计算数据总表" in markdown
+    assert "一级类别" in markdown
+    assert "板总刚度矩阵摘要" not in markdown
+    assert "节点位移表" not in markdown
+
+    word = build_word_report("计算书回归", report_tables)
+    with zipfile.ZipFile(BytesIO(word)) as archive:
+        xml = archive.read("word/document.xml").decode("utf-8")
+    assert "计算数据总表" in xml
+    assert "板总刚度矩阵摘要" not in xml
+
+    pdf = build_pdf_report({"project_name": "计算书回归", "date": "2026-06-30"}, params, tables, results)
+    assert pdf.startswith(b"%PDF")
+
+
+def test_run_scripts_use_an_available_port_instead_of_fixed_8501() -> None:
+    root = Path(__file__).resolve().parents[1]
+    for script_name in ("run_mac.command", "run_win.bat"):
+        script = (root / script_name).read_text(encoding="utf-8")
+        assert "--server.port 0" in script
+        assert "http://localhost:8501" not in script

@@ -12,26 +12,23 @@ import streamlit as st
 
 from calculations.checks import check_design_parameters, checks_to_dataframe
 from calculations.common import CONCRETE_DESIGN_STRENGTH, STEEL_DESIGN_STRENGTH, default_parameters
-from calculations.envelope import calculate_envelope
-from calculations.internal_force import force_points_to_dataframe, line_load_control_points, point_load_control_points
-from calculations.load_combination import analyze_load_combinations
+from calculations.course_design_method import calculate_course_design_method
 from calculations.loads import calculate_load_transfer, transfer_to_dataframe
 from calculations.main_beam import MainBeamInput, calculate_main_beam
-from calculations.moment_capacity import (
-    build_resisting_moment_points,
-    calculate_moment_capacity,
-    resisting_points_to_dataframe,
-)
-from calculations.rebar import recommend_longitudinal_rebar
+from calculations.moment_capacity import calculate_moment_capacity
 from calculations.secondary_beam import SecondaryBeamInput, calculate_secondary_beam
 from calculations.section_estimation import estimate_all_sections, estimates_to_dataframe
 from calculations.slab import SlabInput, calculate_slab
-from charts.plot_moment import figure_to_png_bytes, plot_envelope_diagram, plot_moment_diagram
+from calculations.project_analysis import analyze_project_matrix, member_tables
+from calculations.specification_parameters import parameters_table_rows
+from charts.plot_moment import figure_to_png_bytes
+from charts.plot_control_sections import plot_control_section_diagram
+from charts.plot_force_envelope import plot_matrix_moment_envelope, plot_matrix_shear_envelope
 from charts.plot_resisting_moment import plot_resisting_moment_diagram
-from charts.plot_shear import plot_shear_diagram
 from export.export_excel import build_excel_workbook
 from export.export_pdf import build_pdf_report
 from export.export_report import build_markdown_report
+from export.report_summary import build_calculation_book_tables
 from export.export_word import build_word_report
 
 
@@ -709,11 +706,84 @@ def ensure_state() -> dict[str, Any]:
     return st.session_state.params
 
 
+def invalidate_current_results(state: Any) -> None:
+    """计算失败时使当前结果失效；保留历史缓存但禁止作为当前结果导出。"""
+    state.current_results = None
+    state.current_tables = None
+    state.calculation_valid = False
+
+
+def current_results_are_exportable(state: Any) -> bool:
+    return bool(getattr(state, "calculation_valid", False) and getattr(state, "current_results", None) is not None)
+
+
 def metric_table(rows: list[list[Any]]) -> pd.DataFrame:
     """构造四列表格并统一数值精度。"""
     df = pd.DataFrame(rows, columns=["项目", "公式或来源", "数值", "单位"])
     df["数值"] = df["数值"].map(lambda x: round(float(x), 4) if isinstance(x, (int, float)) else x)
     return df
+
+
+def format_error_number(value: Any, digits: int = 3) -> str:
+    """错误提示中的紧凑数值格式。"""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if digits == 0:
+        return str(int(round(number)))
+    return f"{number:.{digits}f}".rstrip("0").rstrip(".")
+
+
+def span_input_summary(params: dict[str, Any], text_key: str, fallback_key: str) -> str:
+    """返回用户输入的跨度列表；为空时回退到单跨值。"""
+    text = str(params.get(text_key, "")).strip()
+    if text:
+        return text
+    return format_error_number(params.get(fallback_key, ""))
+
+
+def component_failure_context(component: str, params: dict[str, Any]) -> str:
+    """为计算失败补充构件、跨度、截面和处理建议。"""
+    if component == "板":
+        return (
+            f"当前参数：板各跨={span_input_summary(params, 'slab_spans_text', 'slab_span_m')} m，"
+            f"单跨兼容计算跨度={format_error_number(params['slab_span_m'])} m，"
+            f"板厚 h={format_error_number(params['slab_h_mm'], 0)} mm，"
+            f"h0={format_error_number(params['slab_h0_mm'], 0)} mm，"
+            f"板带宽度={format_error_number(params['strip_width_m'])} m。"
+            "建议：增大板厚或有效高度、减小板跨/板带宽度，或按课程要求重新确定板截面后再计算。"
+        )
+    if component == "次梁":
+        return (
+            f"当前参数：次梁各跨={span_input_summary(params, 'secondary_spans_text', 'secondary_span_m')} m，"
+            f"单跨兼容计算跨度={format_error_number(params['secondary_span_m'])} m，"
+            f"截面 b×h={format_error_number(params['secondary_b_mm'], 0)}×{format_error_number(params['secondary_h_mm'], 0)} mm，"
+            f"h0={format_error_number(params['secondary_h0_mm'], 0)} mm，"
+            f"板厚 hf={format_error_number(params['slab_h_mm'], 0)} mm。"
+            "建议：跨度变大后同步增大次梁高度、宽度或有效高度，或调整次梁跨度组合；不要沿用默认小截面给出伪精确结果。"
+        )
+    if component == "主梁":
+        return (
+            f"当前参数：主梁各跨={span_input_summary(params, 'main_spans_text', 'main_span_m')} m，"
+            f"单跨兼容计算跨度={format_error_number(params['main_span_m'])} m，"
+            f"截面 b×h={format_error_number(params['main_b_mm'], 0)}×{format_error_number(params['main_h_mm'], 0)} mm，"
+            f"h0={format_error_number(params['main_h0_mm'], 0)} mm，"
+            f"板厚 hf={format_error_number(params['slab_h_mm'], 0)} mm。"
+            "建议：跨度或集中力增大后同步增大主梁高度、宽度或有效高度，并复核主梁 300×600 口径是否仍适用。"
+        )
+    return (
+        f"当前跨度组合：板={span_input_summary(params, 'slab_spans_text', 'slab_span_m')} m；"
+        f"次梁={span_input_summary(params, 'secondary_spans_text', 'secondary_span_m')} m；"
+        f"主梁={span_input_summary(params, 'main_spans_text', 'main_span_m')} m；"
+        f"L1={format_error_number(params['l1_m'])} m；L2={format_error_number(params['l2_m'])} m。"
+        "建议：保持主梁等跨、板各跨总长等于一个主梁跨度、主梁总长等于 L1、次梁总长等于 L2，并检查支承数量等于跨数+1。"
+    )
+
+
+def raise_with_component_context(component: str, exc: ValueError, params: dict[str, Any]) -> None:
+    """把底层 ValueError 重新包装为可读的构件级提示。"""
+    raise ValueError(f"{component}计算失败：{exc}。{component_failure_context(component, params)}") from exc
 
 
 def option_label(ok: bool) -> str:
@@ -724,79 +794,103 @@ def calculate_project_results(params: dict[str, Any]) -> dict[str, Any]:
     """根据统一参数完成板、次梁、主梁和荷载传递计算。"""
     gamma_g = params["gamma_g"] * params["importance_factor"]
     gamma_q = params["gamma_q"] * params["importance_factor"]
-    slab = calculate_slab(
-        SlabInput(
-            h_mm=params["slab_h_mm"],
-            concrete_unit_weight=params["concrete_unit_weight"],
-            terrazzo_load=params["terrazzo_load"],
-            plaster_thickness_mm=params["plaster_thickness_mm"],
-            plaster_unit_weight=params["plaster_unit_weight"],
-            live_load=params["live_load"],
-            gamma_g=gamma_g,
-            gamma_q=gamma_q,
-            strip_width_m=params["strip_width_m"],
-            l0_m=params["slab_span_m"],
-            alpha=1 / 11,
-            fc=params["fc"],
-            fy=params["fy_slab"],
-            h0_mm=params["slab_h0_mm"],
-            section_name="跨中正弯矩 1/11",
+    try:
+        slab = calculate_slab(
+            SlabInput(
+                h_mm=params["slab_h_mm"],
+                concrete_unit_weight=params["concrete_unit_weight"],
+                terrazzo_load=params["terrazzo_load"],
+                plaster_thickness_mm=params["plaster_thickness_mm"],
+                plaster_unit_weight=params["plaster_unit_weight"],
+                live_load=params["live_load"],
+                gamma_g=gamma_g,
+                gamma_q=gamma_q,
+                strip_width_m=params["strip_width_m"],
+                l0_m=params["slab_span_m"],
+                fc=params["fc"],
+                fy=params["fy_slab"],
+                h0_mm=params["slab_h0_mm"],
+                section_name="单跨兼容摘要（矩阵刚度法）",
+                elastic_modulus_mpa=params.get("elastic_modulus_mpa", 25500.0),
+                stiffness_factor=params.get("slab_stiffness_factor", 1.0),
+            )
         )
-    )
-    secondary = calculate_secondary_beam(
-        SecondaryBeamInput(
-            slab_dead_load_kN_m2=slab.dead_load_standard_kN_m2,
-            tributary_width_m=params["secondary_beam_spacing_m"],
-            b_mm=params["secondary_b_mm"],
-            h_mm=params["secondary_h_mm"],
-            hf_mm=params["slab_h_mm"],
-            concrete_unit_weight=params["concrete_unit_weight"],
-            plaster_thickness_mm=params["plaster_thickness_mm"],
-            plaster_unit_weight=params["plaster_unit_weight"],
-            live_load_kN_m2=params["live_load"],
-            gamma_g=gamma_g,
-            gamma_q=gamma_q,
-            l0_m=params["secondary_span_m"],
-            alpha=1 / 11,
-            beta=0.5,
-            fc=params["fc"],
-            fy=params["fy_beam"],
-            fyv=params["fyv"],
-            h0_mm=params["secondary_h0_mm"],
-            section_name="次梁跨中正弯矩 1/11",
+    except ValueError as exc:
+        raise_with_component_context("板", exc, params)
+    try:
+        secondary = calculate_secondary_beam(
+            SecondaryBeamInput(
+                slab_dead_load_kN_m2=slab.dead_load_standard_kN_m2,
+                tributary_width_m=params["secondary_beam_spacing_m"],
+                b_mm=params["secondary_b_mm"],
+                h_mm=params["secondary_h_mm"],
+                hf_mm=params["slab_h_mm"],
+                concrete_unit_weight=params["concrete_unit_weight"],
+                plaster_thickness_mm=params["plaster_thickness_mm"],
+                plaster_unit_weight=params["plaster_unit_weight"],
+                live_load_kN_m2=params["live_load"],
+                gamma_g=gamma_g,
+                gamma_q=gamma_q,
+                l0_m=params["secondary_span_m"],
+                fc=params["fc"],
+                fy=params["fy_beam"],
+                fyv=params["fyv"],
+                h0_mm=params["secondary_h0_mm"],
+                section_name="单跨兼容摘要（矩阵刚度法）",
+                elastic_modulus_mpa=params.get("elastic_modulus_mpa", 25500.0),
+                stiffness_factor=params.get("secondary_stiffness_factor", 1.0),
+            )
         )
-    )
-    main = calculate_main_beam(
-        MainBeamInput(
-            secondary_dead_load_kN_m=secondary.dead_load_standard_kN_m,
-            secondary_span_m=params["secondary_span_m"],
-            secondary_spacing_m=params["secondary_beam_spacing_m"],
-            b_mm=params["main_b_mm"],
-            h_mm=params["main_h_mm"],
-            hf_mm=params["slab_h_mm"],
-            concrete_unit_weight=params["concrete_unit_weight"],
-            plaster_thickness_mm=params["plaster_thickness_mm"],
-            plaster_unit_weight=params["plaster_unit_weight"],
-            live_load_kN_m2=params["live_load"],
-            gamma_g=gamma_g,
-            gamma_q=gamma_q,
-            l0_m=params["main_span_m"],
-            alpha=0.25,
-            beta=0.5,
-            fc=params["fc"],
-            fy=params["fy_beam"],
-            fyv=params["fyv"],
-            h0_mm=params["main_h0_mm"],
-            section_name="主梁跨中集中荷载 1/4",
+    except ValueError as exc:
+        raise_with_component_context("次梁", exc, params)
+    try:
+        main = calculate_main_beam(
+            MainBeamInput(
+                secondary_dead_load_kN_m=secondary.dead_load_standard_kN_m,
+                secondary_span_m=params["secondary_span_m"],
+                secondary_spacing_m=params["secondary_beam_spacing_m"],
+                b_mm=params["main_b_mm"],
+                h_mm=params["main_h_mm"],
+                hf_mm=params["slab_h_mm"],
+                concrete_unit_weight=params["concrete_unit_weight"],
+                plaster_thickness_mm=params["plaster_thickness_mm"],
+                plaster_unit_weight=params["plaster_unit_weight"],
+                live_load_kN_m2=params["live_load"],
+                gamma_g=gamma_g,
+                gamma_q=gamma_q,
+                l0_m=params["main_span_m"],
+                fc=params["fc"],
+                fy=params["fy_beam"],
+                fyv=params["fyv"],
+                h0_mm=params["main_h0_mm"],
+                section_name="单跨兼容摘要（矩阵刚度法）",
+                elastic_modulus_mpa=params.get("elastic_modulus_mpa", 25500.0),
+                stiffness_factor=params.get("main_stiffness_factor", 1.0),
+            )
         )
-    )
+    except ValueError as exc:
+        raise_with_component_context("主梁", exc, params)
     transfer = calculate_load_transfer(
         slab.dead_load_standard_kN_m2,
         params["live_load"],
         params["secondary_beam_spacing_m"],
         params["secondary_span_m"],
     )
-    return {"slab": slab, "secondary": secondary, "main": main, "transfer": transfer}
+    try:
+        matrix_project = analyze_project_matrix(
+            params,
+            {
+                "dead_load_design_kN_m2": slab.dead_load_design_kN_m2,
+                "live_load_design_kN_m2": slab.live_load_design_kN_m2,
+            },
+        )
+    except ValueError as exc:
+        raise_with_component_context("矩阵分析", exc, params)
+    try:
+        course_design = calculate_course_design_method(params)
+    except ValueError as exc:
+        raise_with_component_context("计算书汇总", exc, params)
+    return {"slab": slab, "secondary": secondary, "main": main, "transfer": transfer, "matrix": matrix_project, "course_design": course_design}
 
 
 def build_result_tables(results: dict[str, Any], params: dict[str, Any]) -> dict[str, pd.DataFrame]:
@@ -819,7 +913,7 @@ def build_result_tables(results: dict[str, Any], params: dict[str, Any]) -> dict
         ),
         "板内力与配筋": metric_table(
             [
-                ["控制截面弯矩 M", "alpha × q × l0^2", slab.moment_kN_m, "kN·m"],
+                ["单跨兼容弯矩 M", "统一矩阵刚度求解器", slab.moment_kN_m, "kN·m"],
                 ["混凝土受压区高度 x", "由 M = fc·b·x·(h0-x/2) 求得", slab.compression_zone_x_mm, "mm"],
                 ["所需钢筋面积 As", "As = fc·b·x/fy", slab.required_as_mm2_per_m, "mm2/m"],
             ]
@@ -844,8 +938,8 @@ def build_result_tables(results: dict[str, Any], params: dict[str, Any]) -> dict
         ),
         "次梁内力与配筋": metric_table(
             [
-                ["控制截面弯矩 M", "alpha × q × l0^2", secondary.moment_kN_m, "kN·m"],
-                ["控制截面剪力 V", "beta × q × l0", secondary.shear_kN, "kN"],
+                ["单跨兼容弯矩 M", "统一矩阵刚度求解器", secondary.moment_kN_m, "kN·m"],
+                ["单跨兼容剪力 V", "统一矩阵刚度求解器", secondary.shear_kN, "kN"],
                 ["所需纵筋面积 As", "As = fc·b·x/fy", secondary.required_as_mm2, "mm2"],
                 ["混凝土抗剪承载力 Vc", "0.7 × sqrt(fc) × b × h0", secondary.concrete_shear_capacity_kN, "kN"],
                 ["所需箍筋 Av/s", "max(V-Vc,0)/(fyv×h0)", secondary.required_av_over_s_mm2_per_mm, "mm2/mm"],
@@ -875,8 +969,8 @@ def build_result_tables(results: dict[str, Any], params: dict[str, Any]) -> dict
         ),
         "主梁内力与配筋": metric_table(
             [
-                ["控制截面弯矩 M", "alpha × P × l0", main.moment_kN_m, "kN·m"],
-                ["控制截面剪力 V", "beta × P", main.shear_kN, "kN"],
+                ["单跨兼容弯矩 M", "统一矩阵刚度求解器", main.moment_kN_m, "kN·m"],
+                ["单跨兼容剪力 V", "统一矩阵刚度求解器", main.shear_kN, "kN"],
                 ["所需纵筋面积 As", "As = fc·b·x/fy", main.required_as_mm2, "mm2"],
                 ["混凝土抗剪承载力 Vc", "0.7 × sqrt(fc) × b × h0", main.concrete_shear_capacity_kN, "kN"],
                 ["所需箍筋 Av/s", "max(V-Vc,0)/(fyv×h0)", main.required_av_over_s_mm2_per_mm, "mm2/mm"],
@@ -893,21 +987,47 @@ def build_result_tables(results: dict[str, Any], params: dict[str, Any]) -> dict
             [[i.name, round(i.av_over_s_mm2_per_mm, 4), option_label(i.is_ok), i.evaluation] for i in main.stirrup_options],
             columns=["箍筋方案", "实配 Av/s (mm2/mm)", "是否满足", "评价"],
         ),
-        "荷载传递总览": transfer_to_dataframe(results["transfer"]),
+        "手算对比附录_旧荷载传递": transfer_to_dataframe(results["transfer"]).assign(
+            说明="非矩阵刚度法正式传力结果，仅供传统简化方法手算对比"
+        ),
     }
+    course_design = results.get("course_design")
+    if course_design is not None:
+        tables["课程系数法_板内力"] = course_design.slab_forces_df
+        tables["课程系数法_次梁内力"] = course_design.secondary_forces_df
+        tables["课程系数法_主梁荷载口径"] = course_design.main_load_cases_df
+        tables["课程系数法_主梁内力"] = course_design.main_forces_df
+        tables["课程系数法_配筋对账"] = course_design.rebar_df
+        tables["课程系数法_需复核项"] = course_design.review_df
+    matrix_project = results.get("matrix")
+    secondary_span_source = max(matrix_project.secondary.model.spans_m) if matrix_project is not None else params["secondary_span_m"]
+    main_span_source = max(matrix_project.main.model.spans_m) if matrix_project is not None else params["main_span_m"]
     tables["截面尺寸初估"] = estimates_to_dataframe(
         estimate_all_sections(
             params["slab_h_mm"],
-            params["secondary_span_m"],
+            secondary_span_source,
             params["secondary_b_mm"],
             params["secondary_h_mm"],
-            params["main_span_m"],
+            main_span_source,
             params["main_b_mm"],
             params["main_h_mm"],
         )
     )
     checks = check_design_parameters(params, {"slab": True, "secondary": True, "main": True, "manual_compare": True})
     tables["智能校核结果"] = checks_to_dataframe(checks)
+    if matrix_project is not None:
+        tables["矩阵荷载逐级传递"] = matrix_project.transfer_df
+        tables["全局荷载工况连续性"] = matrix_project.global_case_df
+        tables["课程近似规范参数"] = pd.DataFrame(parameters_table_rows())
+        tables.update(member_tables(matrix_project.slab, matrix_project.slab_design_df))
+        tables.update(member_tables(matrix_project.secondary, matrix_project.secondary_design_df))
+        tables.update(member_tables(matrix_project.main, matrix_project.main_design_df))
+        for legacy_key in [
+            "板内力与配筋", "板推荐配筋",
+            "次梁荷载", "次梁内力与配筋", "次梁推荐纵筋", "次梁推荐箍筋",
+            "主梁荷载", "主梁内力与配筋", "主梁推荐纵筋", "主梁推荐箍筋",
+        ]:
+            tables.pop(legacy_key, None)
     return tables
 
 
@@ -950,7 +1070,7 @@ def render_chart(chart) -> None:
         try:
             st.plotly_chart(chart.figure, width="stretch")
         except TypeError:
-            st.plotly_chart(chart.figure, use_container_width=True)
+            st.plotly_chart(chart.figure, width="stretch")
     else:
         st.markdown(chart.svg, unsafe_allow_html=True)
 
@@ -1040,7 +1160,7 @@ def render_sidebar_navigation() -> str:
                     f'<div class="nav-item-selected"><span class="nav-emoji">{escape(emoji)}</span><span class="nav-text">{escape(text)}</span></div>',
                     unsafe_allow_html=True,
                 )
-            elif st.button(display_label, key=f"nav_{page_name}", use_container_width=True):
+            elif st.button(display_label, key=f"nav_{page_name}", width="stretch"):
                 st.session_state.current_page = page_name
                 st.rerun()
     st.markdown("</div>", unsafe_allow_html=True)
@@ -1220,7 +1340,7 @@ def render_completion_overview(tables: dict[str, pd.DataFrame]) -> None:
     )
 
 
-def render_home_dashboard(params: dict[str, Any], tables: dict[str, pd.DataFrame]) -> None:
+def render_home_dashboard(params: dict[str, Any], tables: dict[str, pd.DataFrame], results: dict[str, Any]) -> None:
     """首页平台仪表盘。"""
     render_header(
         "整体式单向板肋形楼盖设计辅助计算平台",
@@ -1269,21 +1389,23 @@ def render_home_dashboard(params: dict[str, Any], tables: dict[str, pd.DataFrame
     render_section_title("一键生成成果包")
     render_info_box("请进入“📤 结果导出”页面下载 Excel 结果表、Word 计算书；PNG 图表可在各图形页面单独导出。")
     notes = [
-        "当前支持 Word/Excel/PNG 导出，PDF 可由 Word 另存为 PDF。",
-        "图表为课程设计辅助示意，最终结果需人工复核。",
+        "Word 和 PDF 计算书按计算数据汇总表口径输出，完整矩阵明细保留在 Excel。",
+        "图表为课程设计辅助示意，可在构件页面或完整 Excel 中查看，最终结果需人工复核。",
     ]
     c1, c2, c3 = st.columns(3)
+    home_images = matrix_chart_images(results)
+    calculation_book_tables = build_calculation_book_tables(params, tables, results)
     with c1:
         st.download_button(
             "Excel 结果表",
-            build_excel_workbook(tables),
+            build_excel_workbook(tables, home_images),
             file_name="整体式单向板肋形楼盖计算结果.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
     with c2:
         st.download_button(
             "Word 计算书",
-            build_word_report("整体式单向板肋形楼盖半自动计算书", tables, notes),
+            build_word_report("整体式单向板肋形楼盖计算数据汇总表", calculation_book_tables, notes),
             file_name="整体式单向板肋形楼盖半自动计算书.docx",
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         )
@@ -1298,9 +1420,9 @@ def select_or_manual(label: str, options: list[float], key: str, params: dict[st
     return float(choice)
 
 
-def render_basic_params(params: dict[str, Any]) -> None:
+def render_basic_params(params: dict[str, Any], calculation_error: str | None = None) -> None:
     render_header("基本参数输入", "统一管理楼盖尺寸、材料强度、荷载取值和构件截面尺寸。", ["参数中心", "session_state 共享"])
-    tab1, tab2, tab3, tab4 = st.tabs(["平面与布置", "材料", "荷载", "截面尺寸"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["平面与布置", "材料", "荷载", "截面尺寸", "矩阵模型"])
     with tab1:
         c1, c2, c3 = st.columns(3)
         with c1:
@@ -1333,6 +1455,7 @@ def render_basic_params(params: dict[str, Any]) -> None:
         params["fy_slab"] = c2.number_input("板筋 fy (N/mm2)", min_value=1.0, value=float(params["fy_slab"]), step=10.0)
         params["fy_beam"] = c3.number_input("梁纵筋 fy (N/mm2)", min_value=1.0, value=float(params["fy_beam"]), step=10.0)
         params["fyv"] = c4.number_input("箍筋 fyv (N/mm2)", min_value=1.0, value=float(params["fyv"]), step=10.0)
+        params["elastic_modulus_mpa"] = st.number_input("混凝土弹性模量 E (MPa)", min_value=1.0, value=float(params.get("elastic_modulus_mpa", 25500.0)), step=500.0)
     with tab3:
         c1, c2, c3 = st.columns(3)
         params["concrete_unit_weight"] = c1.number_input("钢筋混凝土重度 (kN/m3)", min_value=0.1, value=float(params["concrete_unit_weight"]), step=0.1)
@@ -1356,13 +1479,42 @@ def render_basic_params(params: dict[str, Any]) -> None:
         params["main_h_mm"] = c3.number_input("主梁高 h (mm)", min_value=1.0, value=float(params["main_h_mm"]), step=10.0)
         params["main_h0_mm"] = c3.number_input("主梁有效高度 h0 (mm)", min_value=1.0, value=float(params["main_h0_mm"]), step=10.0)
         params["main_span_m"] = c3.number_input("主梁计算跨度 (m)", min_value=0.1, value=float(params["main_span_m"]), step=0.1)
+        params["secondary_flange_width_mm"] = c2.number_input("次梁翼缘有效宽度 bf' (mm，0=课程近似自动)", min_value=0.0, value=float(params.get("secondary_flange_width_mm", 0.0)), step=50.0)
+        params["main_flange_width_mm"] = c3.number_input("主梁翼缘有效宽度 bf' (mm，0=课程近似自动)", min_value=0.0, value=float(params.get("main_flange_width_mm", 0.0)), step=50.0)
+        st.caption("bf'=0 时暂按 b+12hf 的课程近似值估算；正式设计需按采用规范、梁间距和跨度复核有效翼缘宽度。")
+        render_warning_box("更换楼盖平面尺寸或跨度组合后，请同步复核板厚、梁高和有效高度 h0。跨度增大但仍沿用默认小截面时，程序会明确提示截面不足并停止计算，避免给出伪精确结果。")
+    with tab5:
+        render_info_box("跨度和支承条件使用英文逗号分隔；支承支持 pin、roller、fixed、free。支承数量必须等于节点数，数量不匹配会明确报错。")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            params["slab_spans_text"] = st.text_input("板各跨跨度 (m)", value=str(params.get("slab_spans_text", "2,2,2")))
+            params["slab_supports_text"] = st.text_input("板节点支承条件", value=str(params.get("slab_supports_text", "pin,pin,pin,pin")))
+            params["slab_live_spans_text"] = st.text_input("手动板活载跨号", value=str(params.get("slab_live_spans_text", "1,2,3")), help="仅关闭自动枚举时使用")
+            params["slab_stiffness_factor"] = st.number_input("板刚度折减系数", min_value=0.05, value=float(params.get("slab_stiffness_factor", 1.0)), step=0.05)
+        with c2:
+            params["secondary_spans_text"] = st.text_input("次梁各跨跨度 (m)", value=str(params.get("secondary_spans_text", "6,6,6,6,6")))
+            params["secondary_supports_text"] = st.text_input("次梁节点支承条件", value=str(params.get("secondary_supports_text", "pin,pin,pin,pin,pin,pin")))
+            params["secondary_live_spans_text"] = st.text_input("手动次梁活载跨号", value=str(params.get("secondary_live_spans_text", "1,2,3,4,5")), help="关闭自动枚举时，用于同一全局工况的次梁活载范围")
+            params["secondary_stiffness_factor"] = st.number_input("次梁刚度折减系数", min_value=0.05, value=float(params.get("secondary_stiffness_factor", 1.0)), step=0.05)
+        with c3:
+            params["main_spans_text"] = st.text_input("主梁各跨跨度 (m)", value=str(params.get("main_spans_text", "6,6,6")))
+            params["main_supports_text"] = st.text_input("主梁节点支承条件", value=str(params.get("main_supports_text", "pin,pin,pin,pin")))
+            params["main_live_spans_text"] = st.text_input("手动主梁活载跨号", value=str(params.get("main_live_spans_text", "1,2,3")), help="仅关闭自动枚举时使用")
+            params["main_point_positions_text"] = st.text_input("主梁集中力全局位置 (m)", value=str(params.get("main_point_positions_text", "")), help="留空时按次梁间距自动生成，例如 2,4,8,10")
+            params["secondary_to_main_support_number"] = st.number_input("本次主梁所在次梁支座线编号", min_value=1, max_value=9, value=int(params.get("secondary_to_main_support_number", 3)), step=1, help="选择沿 L2 方向哪一条主梁线；次梁在该交点的矩阵反力传给主梁。")
+            params["main_stiffness_factor"] = st.number_input("主梁刚度折减系数", min_value=0.05, value=float(params.get("main_stiffness_factor", 1.0)), step=0.05)
+        params["automatic_live_patterns"] = st.toggle("自动枚举全部逐跨活载组合", value=bool(params.get("automatic_live_patterns", True)), help="开启：自动枚举活载；关闭：按手动跨号建立同名全局工况。全跨活载请手动输入全部跨号。")
+        st.caption("主梁集中力位置由次梁间距自动生成，集中力数值来自次梁矩阵分析的支座反力。")
     st.session_state.params = params
     st.success("参数已写入 session_state，板、次梁、主梁和导出模块会共用这些值。")
+    if calculation_error:
+        st.error(f"当前输入参数暂不能完成计算：{calculation_error}")
 
 
 def render_section_page(tables: dict[str, pd.DataFrame]) -> None:
     render_header("结构布置与截面尺寸初估", "按课程设计经验范围快速判断板厚、次梁和主梁截面尺寸。", ["经验初估", "构造复核"])
     render_info_box("梁高经验范围：次梁 h=(1/18-1/12)L，主梁 h=(1/15-1/10)L；梁宽 b=(1/3-1/2)h。")
+    render_warning_box("如果修改了 L1/L2 或各跨跨度，请先让板厚、梁高、有效高度 h0 与新跨度匹配；截面承载力不足时，程序会提示具体构件和当前截面参数。")
     with st.expander("截面尺寸初估结果", expanded=True):
         render_dataframe(tables["截面尺寸初估"])
         render_warning_box("截面初估只用于方案阶段，最终尺寸仍需结合内力、配筋、挠度和构造要求复核。")
@@ -1370,89 +1522,70 @@ def render_section_page(tables: dict[str, pd.DataFrame]) -> None:
 
 def render_component_page(name: str, tables: dict[str, pd.DataFrame], results: dict[str, Any], presentation_mode: bool = False) -> None:
     if name.startswith("板"):
-        result_key, load_key, design_key, rebar_key = "slab", "板荷载", "板内力与配筋", "板推荐配筋"
-        points = line_load_control_points(results["slab"].line_load_design_kN_m, results["slab"].input.l0_m)
-        moment_title = "板控制截面弯矩二次插值示意图"
-        shear_title = "板简化剪力示意图"
-        moment_kind = "quadratic"
-        shear_mode = "linear"
+        result_key, prefix = "slab", "板"
     elif name.startswith("次梁"):
-        result_key, load_key, design_key, rebar_key = "secondary", "次梁荷载", "次梁内力与配筋", "次梁推荐纵筋"
-        points = line_load_control_points(results["secondary"].total_line_load_design_kN_m, results["secondary"].input.l0_m)
-        moment_title = "次梁控制截面弯矩二次插值示意图"
-        shear_title = "次梁简化剪力示意图"
-        moment_kind = "quadratic"
-        shear_mode = "linear"
+        result_key, prefix = "secondary", "次梁"
     else:
-        result_key, load_key, design_key, rebar_key = "main", "主梁荷载", "主梁内力与配筋", "主梁推荐纵筋"
-        points = point_load_control_points(results["main"].total_concentrated_design_kN, results["main"].input.l0_m)
-        moment_title = "主梁简化弯矩示意图"
-        shear_title = "主梁简化剪力阶梯示意图"
-        moment_kind = "control_polyline"
-        shear_mode = "step"
-
-    render_header(name, component_intro(result_key), ["答辩展示" if presentation_mode else "计算检查", "课程设计辅助"])
-    render_metric_cards(component_metric_cards(result_key, results), columns=3 if result_key != "slab" else 5)
-
-    force_df, rebar_calc_df = split_force_and_rebar_calc(tables[design_key])
+        result_key, prefix = "main", "主梁"
+    load_key = f"{prefix}矩阵荷载表"
+    matrix = getattr(results["matrix"], result_key)
+    design_df = getattr(results["matrix"], f"{result_key}_design_df")
+    max_m = max(matrix.control_df["最大正弯矩 (kN·m)"].max(), abs(matrix.control_df["最大负弯矩 (kN·m)"].min()))
+    max_v = max(matrix.control_df["最大正剪力 (kN)"].max(), abs(matrix.control_df["最大负剪力 (kN)"].min()))
+    render_header(name, f"{component_intro(result_key)}正式内力采用多跨矩阵刚度法。", ["矩阵刚度法", "逐截面设计"])
+    render_info_box(
+        "控制截面来自实际矩阵内力提取位置：支座中心弯矩与支座边缘弯矩分别保留、分别设计；"
+        "支座中心用于检查最大负弯矩，支座边缘同时用于面内弯矩和剪力控制，不把两者混成一个截面。"
+    )
+    render_metric_cards(
+        [("跨数", len(matrix.model.spans_m), "跨", "连续梁模型"), ("荷载工况", len(matrix.patterns), "个", "逐跨活载枚举"), ("控制截面", len(matrix.control_sections), "个", "编号与图表一致"), ("最大 |M|", round(float(max_m), 3), "kN·m", "内力包络"), ("最大 |V|", round(float(max_v), 3), "kN", "内力包络")],
+        columns=5,
+    )
     tabs = st.tabs(["输入参数", "计算过程", "结果表格", "图形展示", "校核提示", "导出"])
     with tabs[0]:
-        if presentation_mode:
-            render_info_box("答辩展示模式已开启：本页优先展示关键参数摘要，完整输入参数可关闭答辩模式后查看。")
-            render_dataframe(input_table_for_component(result_key, results[result_key]).head(8))
-        else:
-            with st.expander("完整输入参数", expanded=True):
-                render_dataframe(input_table_for_component(result_key, results[result_key]))
+        with st.expander("节点与支承条件", expanded=True):
+            render_dataframe(matrix.node_df)
+        with st.expander("单元与 EI", expanded=True):
+            render_dataframe(matrix.element_df)
+        with st.expander("活载工况", expanded=not presentation_mode):
+            render_dataframe(matrix.load_case_df)
     with tabs[1]:
         with st.expander("荷载计算过程", expanded=True):
             st.latex(r"g_d=\gamma_0\gamma_G g_k,\quad q_d=\gamma_0\gamma_Q q_k")
             render_dataframe(tables[load_key])
-            render_warning_box("表中单位已按 kN、m、mm 体系整理；最终计算书仍需人工检查单位换算。")
-        with st.expander("内力计算过程", expanded=not presentation_mode):
-            st.latex(r"M=\alpha q l_0^2 \quad 或 \quad M=\alpha P l_0")
-            if result_key != "slab":
-                st.latex(r"V=\beta ql_0 \quad 或 \quad V=\beta P")
-            render_dataframe(force_df)
-        with st.expander("配筋计算过程", expanded=not presentation_mode):
+        with st.expander("矩阵刚度计算过程", expanded=True):
+            st.latex(r"\mathbf{K}\mathbf{d}=\mathbf{F},\qquad \mathbf{f}_e=\mathbf{k}_e\mathbf{d}_e-\mathbf{f}_{eq}")
+            render_dataframe(matrix.stiffness_summary_df)
+            render_dataframe(matrix.end_force_df if not presentation_mode else matrix.end_force_df.head(16))
+        with st.expander("逐截面配筋计算", expanded=not presentation_mode):
             st.latex(r"As=\frac{f_c b x}{f_y},\quad M=f_c b x(h_0-x/2)")
-            if result_key != "slab":
-                st.latex(r"V_c=0.7\sqrt{f_c} b h_0,\quad A_v/s=\frac{\max(V-V_c,0)}{f_{yv}h_0}")
-            render_dataframe(rebar_calc_df)
+            render_dataframe(design_df)
     with tabs[2]:
-        st.caption("下列表格汇总程序计算结果，判断结果已按满足、不足、偏保守进行高亮。")
-        with st.expander("关键结果表", expanded=True):
-            render_dataframe(tables[load_key])
-            render_dataframe(force_df)
-        with st.expander("配筋推荐表", expanded=True):
-            render_dataframe(rebar_calc_df)
-            render_dataframe(tables[rebar_key])
-            if result_key != "slab":
-                render_dataframe(tables["次梁推荐箍筋" if result_key == "secondary" else "主梁推荐箍筋"])
-        render_warning_box("配筋推荐用于课程设计辅助筛选，最终钢筋直径、间距、锚固和构造要求需人工复核。")
+        with st.expander("控制截面内力包络", expanded=True):
+            render_dataframe(matrix.control_df)
+        with st.expander("逐控制截面配筋", expanded=True):
+            render_dataframe(design_df)
+        with st.expander("支座反力", expanded=False):
+            render_dataframe(matrix.reaction_df)
     with tabs[3]:
-        labels = [p.position for p in points]
-        xs = [p.x_m for p in points]
-        moments = [p.moment_kN_m for p in points]
-        shears = [p.shear_kN for p in points]
-        with st.expander("控制截面弯矩示意图", expanded=True):
-            fig_m = plot_moment_diagram(xs, moments, labels, moment_title, curve_kind=moment_kind)
-            render_chart(fig_m)
-            st.download_button("导出弯矩图 PNG", figure_to_png_bytes(fig_m), file_name=f"{result_key}_moment.png", mime="image/png")
-            st.caption("本图为程序辅助示意图，最终结果需结合课程设计手算过程复核。")
-            if result_key in {"slab", "secondary"}:
-                graph_note("简化示意 / 控制截面二次插值曲线", "左支座、跨中、右支座控制弯矩", "均布荷载下板或次梁的课程设计展示", "连续梁内力系数、支座条件和手算内力表")
-            else:
-                graph_note("简化示意 / 控制点分段线", "主梁控制截面弯矩", "主梁受次梁集中力作用且未展开完整集中力位置时的示意展示", "集中力位置、连续梁精确内力和教师指定系数")
-        with st.expander("简化剪力示意图", expanded=True):
-            fig_v = plot_shear_diagram(xs, shears, labels, shear_title, mode=shear_mode)
-            render_chart(fig_v)
-            st.download_button("导出剪力图 PNG", figure_to_png_bytes(fig_v), file_name=f"{result_key}_shear.png", mime="image/png")
-            st.caption("本图为程序辅助示意图，最终结果需结合课程设计手算过程复核。")
-            graph_note("简化示意", "控制截面剪力", "课程设计展示和结果检查", "剪力突变位置、支座反力和斜截面设计")
+        fig_control = plot_control_section_diagram(matrix)
+        render_chart(fig_control)
+        st.download_button("导出控制截面示意图 PNG", figure_to_png_bytes(fig_control), file_name=f"{result_key}_control_sections.png", mime="image/png")
+        fig_m = plot_matrix_moment_envelope(matrix)
+        render_chart(fig_m)
+        st.download_button("导出弯矩包络图 PNG", figure_to_png_bytes(fig_m), file_name=f"{result_key}_moment_envelope.png", mime="image/png")
+        fig_v = plot_matrix_shear_envelope(matrix)
+        render_chart(fig_v)
+        st.download_button("导出剪力包络图 PNG", figure_to_png_bytes(fig_v), file_name=f"{result_key}_shear_envelope.png", mime="image/png")
     with tabs[4]:
-        render_warning_box("本模块中的内力系数、抗剪估算和配筋推荐均为课程设计辅助计算，最终应按教材或规范人工复核。")
+        error_count = int((design_df["是否满足"] != "满足").sum())
+        if error_count:
+            render_warning_box(f"发现 {error_count} 条配筋方案未满足默认筛选条件，应调整截面或人工设计。")
+        else:
+            st.success("全部控制截面均找到满足默认面积与布置条件的方案。")
+        render_warning_box("最小配筋率暂按课程设计默认值 0.2% 处理；锚固、截断、裂缝、挠度和具体规范条文仍需人工复核。")
     with tabs[5]:
-        subset = {load_key: tables[load_key], design_key: tables[design_key], rebar_key: tables[rebar_key]}
+        subset = {key: value for key, value in tables.items() if key.startswith(prefix)}
         st.download_button(
             "导出本页 Excel",
             build_excel_workbook(subset),
@@ -1463,136 +1596,89 @@ def render_component_page(name: str, tables: dict[str, pd.DataFrame], results: d
 
 
 def render_transfer_page(tables: dict[str, pd.DataFrame]) -> None:
-    render_header("荷载自动传递总览", "展示楼面荷载从板传至次梁，再由次梁传至主梁的计算路径。", ["荷载路径", "单位追踪"])
+    render_header("荷载自动传递总览", "板与次梁的矩阵支座反力逐级传给下一级构件。", ["矩阵反力", "单位追踪"])
     render_load_path_card()
-    render_info_box("板到次梁：kN/m² × m = kN/m；次梁到主梁：kN/m × m = kN。")
-    with st.expander("荷载传递明细表", expanded=True):
-        render_dataframe(tables["荷载传递总览"])
+    render_info_box("矩阵刚度法用于各级内力计算。同一 G、Q、G+Q/逐跨活载工况依次完成板求解；板带反力除以板带宽度得到 kN/m 后逐支承线传给次梁；次梁反力再按实际交点位置以 kN 传给主梁。")
+    with st.expander("矩阵反力传递明细", expanded=True):
+        render_dataframe(tables["矩阵荷载逐级传递"])
+    with st.expander("原始荷载量纲核对", expanded=False):
+        render_dataframe(tables["手算对比附录_旧荷载传递"])
+        st.caption("本表仅供传统简化手算对比，不是矩阵刚度法正式传力结果。")
     render_warning_box("若发现 m、mm 或 kN/m²、kN/m、kN 混用，请回到基本参数页检查单位。")
 
 
 def render_envelope_page(results: dict[str, Any]) -> None:
-    render_header("最不利内力与简化弯矩包络示意图", "比较不同活载布置下的控制截面内力，辅助确定最不利组合。", ["简化包络", "辅助示意"])
-    render_warning_box("本模块用于课程设计辅助分析，内力系数和荷载布置应与课程教材或教师要求一致，最终结果需人工复核。")
-    member = st.radio("选择构件", ["次梁", "主梁"], horizontal=True)
-    if member == "次梁":
-        curves, summary = calculate_envelope(results["secondary"].dead_load_design_kN_m, results["secondary"].live_load_design_kN_m, results["secondary"].input.l0_m, "line")
-    else:
-        curves, summary = calculate_envelope(results["main"].dead_load_design_kN, results["main"].live_load_design_kN, results["main"].input.l0_m, "point")
-    rows = []
-    section_labels = ["左支座", "跨中", "右支座"]
-    for curve in curves:
-        for label, x, moment, shear in zip(section_labels, curve.positions, curve.moments, curve.shears):
-            rows.append([curve.pattern, label, round(x, 3), round(moment, 4), round(shear, 4)])
-    with st.expander("不同活载布置下的控制内力", expanded=True):
-        render_dataframe(pd.DataFrame(rows, columns=["活载布置", "截面位置", "x (m)", "弯矩 M (kN·m)", "剪力 V (kN)"]))
-    with st.expander("最不利控制内力", expanded=True):
-        render_dataframe(summary)
-    max_env = [max(curve.moments[i] for curve in curves) for i in range(3)]
-    min_env = [min(curve.moments[i] for curve in curves) for i in range(3)]
-    st.caption("下图显示多个活载工况控制截面曲线，以及最大包络线和最小包络线。")
-    fig = plot_envelope_diagram(curves, max_env, min_env, ["左支座", "跨中", "右支座"], f"{member}简化弯矩包络示意图")
-    render_chart(fig)
-    st.download_button("导出简化弯矩包络示意图 PNG", figure_to_png_bytes(fig), file_name=f"{member}_envelope.png", mime="image/png")
-    st.caption("本图根据左支座、跨中、右支座等控制截面内力绘制，为课程设计辅助示意图，不代表精确连续弯矩曲线，最终结果需结合手算内力表复核。")
-    graph_note("简化示意 / 控制点包络", "不同活载布置下的控制截面内力", "课程设计中最不利内力辅助比较", "活载布置、教材内力系数、影响线或教师要求")
+    render_header("矩阵刚度法连续内力包络", "比较全部逐跨活载工况，显示真实分段内力曲线。", ["矩阵刚度法", "非插值"])
+    render_section_title("三类构件控制截面示意图")
+    for label, key in [("板控制截面示意图", "slab"), ("次梁控制截面示意图（30m方向）", "secondary"), ("主梁控制截面示意图（18m方向）", "main")]:
+        with st.expander(label, expanded=True):
+            render_chart(plot_control_section_diagram(getattr(results["matrix"], key)))
+    member = st.radio("选择构件", ["板", "次梁", "主梁"], horizontal=True, key="matrix_envelope_member")
+    matrix = {"板": results["matrix"].slab, "次梁": results["matrix"].secondary, "主梁": results["matrix"].main}[member]
+    render_chart(plot_matrix_moment_envelope(matrix))
+    render_chart(plot_matrix_shear_envelope(matrix))
+    with st.expander("控制截面包络数据", expanded=True):
+        render_dataframe(matrix.control_df)
+    with st.expander("连续包络采样数据", expanded=False):
+        render_dataframe(matrix.envelope_df)
 
 
 def render_load_combination_page(results: dict[str, Any]) -> None:
-    render_header("📈 最不利荷载组合分析", "自动比较典型活载布置工况，输出控制弯矩、控制剪力和工程解释。", ["加分项", "活载布置", "包络分析"])
-    render_warning_box("本模块采用课程设计辅助简化系数生成典型工况，适合作为答辩展示和最不利内力筛选；最终内力系数仍需按教材或教师要求复核。")
-    member = st.radio("选择分析构件", ["板", "次梁", "主梁"], horizontal=True, key="load_combination_member")
-    analysis = analyze_load_combinations(member, results)
-
-    render_metric_cards(
-        [
-            ("最不利工况名称", analysis.controlling_pattern, "", analysis.moment_explanation),
-            ("控制弯矩", analysis.controlling_moment, "kN·m", analysis.controlling_layout),
-            ("控制剪力", analysis.controlling_shear, "kN", analysis.shear_explanation),
-        ],
-        columns=3,
-    )
-    render_info_box(f"{analysis.moment_explanation}；{analysis.shear_explanation}。")
-
-    with st.expander("最不利结果汇总", expanded=True):
-        render_dataframe(analysis.summary_df)
-    with st.expander("全部工况计算结果", expanded=False):
-        render_dataframe(analysis.comparison_df)
-
-    pattern_df = (
-        analysis.comparison_df.groupby("工况名称", as_index=False)
-        .agg({"弯矩 M (kN·m)": lambda x: x.abs().max(), "剪力 V (kN)": lambda x: x.abs().max()})
-        .rename(columns={"弯矩 M (kN·m)": "最大绝对弯矩 (kN·m)", "剪力 V (kN)": "最大绝对剪力 (kN)"})
-    )
+    render_header("最不利荷载组合分析", "逐跨枚举活载并为每个工况调用矩阵刚度求解器。", ["矩阵工况", "内力包络"])
+    member = st.radio("选择分析构件", ["板", "次梁", "主梁"], horizontal=True, key="load_combination_member_matrix")
+    matrix = {"板": results["matrix"].slab, "次梁": results["matrix"].secondary, "主梁": results["matrix"].main}[member]
+    rows = []
+    for pattern in matrix.patterns:
+        case = matrix.cases[pattern.name]
+        samples = case.sample(61)
+        rows.append({"工况": pattern.name, "活载跨": ",".join(str(i + 1) for i in sorted(pattern.active_live_spans)) or "无", "最大 |M| (kN·m)": max(abs(p.moment_kN_m) for p in samples), "最大 |V| (kN)": max(abs(p.shear_kN) for p in samples), "竖向平衡残差 (kN)": case.vertical_equilibrium_error_kN})
+    pattern_df = pd.DataFrame(rows)
+    render_dataframe(pattern_df)
     bar_fig = go.Figure()
-    bar_fig.add_bar(x=pattern_df["工况名称"], y=pattern_df["最大绝对弯矩 (kN·m)"], name="最大绝对弯矩")
-    bar_fig.add_bar(x=pattern_df["工况名称"], y=pattern_df["最大绝对剪力 (kN)"], name="最大绝对剪力")
-    bar_fig.update_layout(
-        title=f"{member}工况对比柱状图",
-        barmode="group",
-        paper_bgcolor="#f6f8fb",
-        plot_bgcolor="#ffffff",
-        font={"family": "Arial, Microsoft YaHei, sans-serif", "color": "#17324d"},
-        legend={"orientation": "h"},
-        margin={"l": 45, "r": 20, "t": 58, "b": 80},
-    )
-    st.plotly_chart(bar_fig, use_container_width=True)
-
-    labels = analysis.moment_envelope_df["截面位置"].tolist()
-    xs = analysis.moment_envelope_df["x (m)"].astype(float).tolist()
-    moments = analysis.moment_envelope_df["最大弯矩包络 (kN·m)"].astype(float).tolist()
-    shears = analysis.shear_envelope_df["最大剪力包络 (kN)"].astype(float).tolist()
-    c1, c2 = st.columns(2)
-    with c1:
-        render_chart(plot_moment_diagram(xs, moments, labels, f"{member}最大弯矩包络图"))
-        with st.expander("最大弯矩包络数据", expanded=False):
-            render_dataframe(analysis.moment_envelope_df)
-    with c2:
-        render_chart(plot_shear_diagram(xs, shears, labels, f"{member}最大剪力包络图"))
-        with st.expander("最大剪力包络数据", expanded=False):
-            render_dataframe(analysis.shear_envelope_df)
+    bar_fig.add_bar(x=pattern_df["工况"], y=pattern_df["最大 |M| (kN·m)"], name="最大 |M|")
+    bar_fig.add_bar(x=pattern_df["工况"], y=pattern_df["最大 |V| (kN)"], name="最大 |V|")
+    bar_fig.update_layout(title=f"{member}矩阵工况对比", barmode="group", template="plotly_white", legend={"orientation": "h"})
+    st.plotly_chart(bar_fig, width="stretch")
+    with st.expander("逐控制截面控制工况", expanded=True):
+        render_dataframe(matrix.control_df)
 
 
 def render_rebar_page(tables: dict[str, pd.DataFrame]) -> None:
-    render_header("配筋方案推荐与超配率提示", "汇总板筋、梁纵筋和箍筋推荐方案，快速识别不足和偏保守配置。", ["配筋推荐", "超配率"])
+    render_header("逐控制截面配筋方案", "每个控制截面按自己的正负弯矩和剪力包络独立设计。", ["逐截面", "超配率"])
     render_info_box("超配率 = (实配面积 - 计算所需面积) / 计算所需面积 × 100%。超过 30% 时提示偏保守。")
-    for key in ["板推荐配筋", "次梁推荐纵筋", "次梁推荐箍筋", "主梁推荐纵筋", "主梁推荐箍筋"]:
-        with st.expander(key, expanded=key in {"板推荐配筋", "次梁推荐纵筋", "主梁推荐纵筋"}):
+    for key in ["板逐控制截面配筋表", "次梁逐控制截面配筋表", "主梁逐控制截面配筋表"]:
+        with st.expander(key, expanded=True):
             render_dataframe(tables[key])
             render_warning_box("推荐方案仅用于课程设计辅助筛选，最终配筋仍需检查构造、净距、锚固和教师要求。")
 
 
-def first_ok_longitudinal(options) -> Any:
-    for item in options:
-        if item.is_ok:
-            return item
-    return options[-1]
-
-
 def render_resisting_page(results: dict[str, Any]) -> None:
-    render_header("简化抵抗弯矩示意图", "根据推荐纵筋承载力与设计弯矩进行分段示意对比。", ["承载力示意", "人工复核"])
-    render_warning_box("简化抵抗弯矩示意图仅用于辅助展示，纵筋截断、弯起、锚固长度应按教材或规范要求人工复核。")
-    member = st.radio("选择构件", ["次梁", "主梁"], horizontal=True, key="resisting_member")
-    result = results["secondary"] if member == "次梁" else results["main"]
-    positive_option = first_ok_longitudinal(result.longitudinal_options)
-    negative_option = first_ok_longitudinal(recommend_longitudinal_rebar(result.required_as_mm2 * 1.05))
-    positive_mu = calculate_moment_capacity(positive_option.area_mm2, result.input.fc, result.input.fy, result.input.b_mm, result.input.h0_mm)
-    negative_mu = calculate_moment_capacity(negative_option.area_mm2, result.input.fc, result.input.fy, result.input.b_mm, result.input.h0_mm)
-    points = build_resisting_moment_points(result.input.l0_m, abs(result.moment_kN_m), -abs(result.moment_kN_m) * 0.85, positive_mu, negative_mu)
-    df = resisting_points_to_dataframe(points)
-    with st.expander("抵抗弯矩控制表", expanded=True):
-        render_dataframe(df)
-    fig = plot_resisting_moment_diagram(
-        [p.x_m for p in points],
-        [p.design_moment_kN_m for p in points],
-        [p.capacity_kN_m for p in points],
-        [p.position for p in points],
-        f"{member}简化抵抗弯矩示意图",
+    render_header("逐控制截面抵抗弯矩核对", "用各截面推荐纵筋承载力覆盖对应矩阵设计弯矩。", ["逐截面", "矩阵内力"])
+    member = st.radio("选择构件", ["次梁", "主梁"], horizontal=True, key="resisting_member_matrix")
+    key = "secondary" if member == "次梁" else "main"
+    design = getattr(results["matrix"], f"{key}_design_df").copy()
+    legacy = results[key]
+    capacities = []
+    judgements = []
+    for _, row in design.iterrows():
+        area = float(row["实配面积 (mm2)"])
+        capacity = calculate_moment_capacity(area, legacy.input.fc, legacy.input.fy, legacy.input.b_mm, legacy.input.h0_mm) if area > 0 else 0.0
+        signed = -capacity if row["设计方向"] == "负弯矩" else capacity
+        capacities.append(signed)
+        judgements.append("满足" if abs(signed) + 1e-9 >= abs(float(row["M (kN·m)"])) else "不足")
+    design["抵抗弯矩 Mu (kN·m)"] = capacities
+    design["承载力判断"] = judgements
+    render_dataframe(design[["截面编号", "截面名称", "x (m)", "设计方向", "M (kN·m)", "推荐纵筋", "抵抗弯矩 Mu (kN·m)", "承载力判断"]])
+    chart = plot_resisting_moment_diagram(
+        design["x (m)"].astype(float).tolist(),
+        design["M (kN·m)"].astype(float).tolist(),
+        capacities,
+        [f"{row['截面编号']}-{row['设计方向']}" for _, row in design.iterrows()],
+        f"{member}逐控制截面抵抗弯矩图",
     )
-    render_chart(fig)
-    st.download_button("导出简化抵抗弯矩示意图 PNG", figure_to_png_bytes(fig), file_name=f"{member}_resisting_moment.png", mime="image/png")
-    st.caption("纵筋截断、弯起和锚固长度需按教材或规范人工确定。")
-    graph_note("简化示意 / 分段抵抗弯矩", "推荐纵筋承载力和控制截面设计弯矩", "展示配筋区段承载力是否覆盖控制弯矩", "纵筋截断、弯起、锚固长度、构造钢筋和详图")
+    render_chart(chart)
+    st.download_button("导出逐截面抵抗弯矩图 PNG", figure_to_png_bytes(chart), file_name=f"{key}_resisting_moment.png", mime="image/png")
+    render_warning_box("纵筋截断、弯起、锚固长度及支座节点构造仍需按课程采用规范人工确定。")
 
 
 def render_checks_page(tables: dict[str, pd.DataFrame]) -> None:
@@ -1612,39 +1698,54 @@ def render_checks_page(tables: dict[str, pd.DataFrame]) -> None:
         render_dataframe(df)
 
 
-def render_export_page(tables: dict[str, pd.DataFrame]) -> None:
+def matrix_chart_images(results: dict[str, Any]) -> dict[str, bytes]:
+    """生成 Word/Excel 共用的矩阵计算图形。"""
+    images: dict[str, bytes] = {}
+    for label, key in [("板", "slab"), ("次梁", "secondary"), ("主梁", "main")]:
+        matrix = getattr(results["matrix"], key)
+        direction = {"slab": "板计算方向", "secondary": "30m方向", "main": "18m方向"}[key]
+        images[f"{label}控制截面示意图（{direction}）"] = figure_to_png_bytes(plot_control_section_diagram(matrix))
+        images[f"{label}弯矩包络图"] = figure_to_png_bytes(plot_matrix_moment_envelope(matrix))
+        images[f"{label}剪力包络图"] = figure_to_png_bytes(plot_matrix_shear_envelope(matrix))
+    return images
+
+
+def render_export_page(params: dict[str, Any], tables: dict[str, pd.DataFrame], results: dict[str, Any]) -> None:
     render_header("结果导出与半自动计算书", "一键生成课程设计答辩和计算书整理所需成果文件。", ["Excel", "Word", "PNG"])
     notes = [
-        "当前支持 Word/Excel/PNG 导出，PDF 可由 Word 另存为 PDF。",
-        "最不利内力包络、斜截面箍筋和简化抵抗弯矩示意图为简化方法，需人工复核。",
-        "计算书中小组成员、构件编号、手算页码和教师指定系数需人工补充。",
+        "Word、Markdown 和 PDF 计算书按计算数据汇总表口径输出，不再倾倒全部矩阵明细。",
+        "完整节点、单元、刚度矩阵、反力和包络采样数据仍保留在 Excel 结果表中。",
+        "计算书中小组成员、构件编号、手算页码、教师指定系数和构造详图需人工补充。",
+        "梁跨中正弯矩按 T 形截面判断，支座负弯矩按矩形截面；当前规范参数与抗剪公式按课程近似值估算，需人工复核。",
     ]
     render_feature_cards(
         [
             ("Excel 结果表", "包含基本参数、构件计算、荷载传递和校核结果。"),
-            ("Word 计算书", "半自动生成课程设计计算书框架，可继续人工补充。"),
+            ("Word 计算书", "按小组计算数据汇总表格式输出，可继续人工补充。"),
             ("PNG 图表", "各图形页面可单独导出，便于放入 PPT。"),
         ],
         columns=3,
     )
     c1, c2, c3 = st.columns(3)
+    images = matrix_chart_images(results)
+    calculation_book_tables = build_calculation_book_tables(params, tables, results)
     with c1:
         st.download_button(
             "导出完整 Excel",
-            build_excel_workbook(tables),
+            build_excel_workbook(tables, images),
             file_name="整体式单向板肋形楼盖计算结果.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
     with c2:
         st.download_button(
             "导出 Word 半自动计算书",
-            build_word_report("整体式单向板肋形楼盖半自动计算书", tables, notes),
+            build_word_report("整体式单向板肋形楼盖计算数据汇总表", calculation_book_tables, notes),
             file_name="整体式单向板肋形楼盖半自动计算书.docx",
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         )
     with c3:
-        st.download_button("导出 Markdown 计算书", build_markdown_report("整体式单向板肋形楼盖半自动计算书", tables, notes).encode("utf-8"), file_name="整体式单向板肋形楼盖半自动计算书.md")
-    render_info_box("图片导出请进入板、次梁、主梁、简化包络示意图或简化抵抗弯矩示意图页面，点击对应 PNG 下载按钮。")
+        st.download_button("导出 Markdown 计算书", build_markdown_report("整体式单向板肋形楼盖计算数据汇总表", calculation_book_tables, notes).encode("utf-8"), file_name="整体式单向板肋形楼盖半自动计算书.md")
+    render_info_box("Word、Markdown 和 PDF 输出计算数据汇总表；完整矩阵明细和图形仍在 Excel 与各构件页面中保留。")
 
 
 def render_auto_report_page(params: dict[str, Any], tables: dict[str, pd.DataFrame], results: dict[str, Any]) -> None:
@@ -1661,8 +1762,8 @@ def render_auto_report_page(params: dict[str, Any], tables: dict[str, pd.DataFra
     render_feature_cards(
         [
             ("封面信息", "项目名称、学生姓名、学号、班级和日期。"),
-            ("计算过程", "包含板、次梁、主梁的荷载、内力和配筋表。"),
-            ("图表插入", "自动插入弯矩图、剪力图、包络图和抵抗弯矩图。"),
+            ("汇总表", "按一级类别、项目、板、次梁、主梁、复核提示整理。"),
+            ("复核说明", "保留主梁 300×600 口径、截图原始口径和需人工复核事项。"),
         ],
         columns=3,
     )
@@ -1707,16 +1808,19 @@ def main() -> None:
         tables = build_result_tables(results, params)
         st.session_state.latest_results = results
         st.session_state.latest_tables = tables
+        st.session_state.current_results = results
+        st.session_state.current_tables = tables
+        st.session_state.calculation_valid = True
     except ValueError as exc:
-        results = st.session_state.get("latest_results")
-        tables = st.session_state.get("latest_tables")
+        invalidate_current_results(st.session_state)
         st.error(f"当前输入参数暂不能完成计算：{exc}")
-        if results is None or tables is None:
-            render_basic_params(params)
-            return
+        if st.session_state.get("latest_results") is not None:
+            st.warning("已保留上一次成功计算结果，但它不对应当前输入参数；本次不显示结果且所有下载入口已禁用。")
+        render_basic_params(params, calculation_error=str(exc))
+        return
 
     if page == "🏠 首页":
-        render_home_dashboard(params, tables)
+        render_home_dashboard(params, tables, results)
     elif page == "⚙️ 基本参数":
         render_basic_params(params)
     elif page == "📐 截面初估":
@@ -1740,7 +1844,7 @@ def main() -> None:
     elif page == "✅ 智能校核":
         render_checks_page(tables)
     elif page == "📤 结果导出":
-        render_export_page(tables)
+        render_export_page(params, tables, results)
     elif page == "📄 自动计算书":
         render_auto_report_page(params, tables, results)
     else:

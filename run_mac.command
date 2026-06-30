@@ -40,10 +40,11 @@ echo "Python:"
 "$PYTHON_CMD" --version
 echo
 echo "Starting Streamlit..."
-echo "If the browser does not open, visit http://localhost:8501"
+echo "An available local port will be selected automatically."
+echo "If the browser does not open, use the Local URL shown below."
 echo
 
-"$PYTHON_CMD" -m streamlit run app.py
+"$PYTHON_CMD" -m streamlit run app.py --server.port 0
 RUN_STATUS=$?
 
 echo
